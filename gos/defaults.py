@@ -10,13 +10,16 @@ from __future__ import annotations
 
 import time
 
+from . import v2configs
+
 
 def default_counsellor(counsellor_id: int) -> dict:
     """Unlocked-vizier record understood by _ministerMod.
 
-    Talent is the client's [talentId, level] pair list from TcCounsellor.
-    Leaving it empty makes every combat skill disappear (and the first boss
-    fight unwinnable), so the three starter viziers carry their real talents.
+    Talent/Speciality come from the original TcCounsellor config for EVERY id.
+    The old hard-coded table only covered ids 1-3, so viziers unlocked by
+    TcLvUpgradeCfg.UnlockCounsellor (6, 7, 8, ...) were created with no talents
+    at all.  The literals remain as a fallback if the config is unavailable.
     """
     talents = {
         1: [2, 39, 55, 75],
@@ -28,6 +31,16 @@ def default_counsellor(counsellor_id: int) -> dict:
         2: [1, 0, 0, 0],
         3: [0, 1, 0, 0],
     }
+    _cfg = None
+    for row in v2configs.load("TcCounsellor"):
+        if isinstance(row, dict) and int(row.get("CounsellorId") or 0) == int(counsellor_id):
+            _cfg = row
+            break
+    if _cfg:
+        if isinstance(_cfg.get("Talent"), list) and _cfg["Talent"]:
+            talents[int(counsellor_id)] = [int(t) for t in _cfg["Talent"]]
+        if isinstance(_cfg.get("Speciality"), list) and _cfg["Speciality"]:
+            speciality[int(counsellor_id)] = [int(s) for s in _cfg["Speciality"]]
     return {
         "CounsellorId": counsellor_id,
         "Id": counsellor_id,
@@ -53,6 +66,26 @@ def default_counsellor(counsellor_id: int) -> dict:
         "HaveSkinId": [{"SkinId": counsellor_id, "SkinLv": 0}],
         "PowerAddition": {"CultivatePercentage": 0, "CultivateConst": 0},
     }
+
+
+def level_unlocked_counsellors(level: int) -> list[int]:
+    """Vizier ids granted by original TcLvUpgradeCfg up to ``level``.
+
+    character.upOfficerScene.lua reads UnlockCounsellor from the newly reached
+    level's row and calls `_ministerMod.setMinisterInfo(id, "IsLock", 0)` — a
+    purely client-side change.  Our server must mirror it or the unlock is
+    lost on the next login (the login snapshot overwrites RoleCounsellor).
+    """
+    result: list[int] = []
+    for row in v2configs.load("TcLvUpgradeCfg"):
+        if not isinstance(row, dict):
+            continue
+        if int(row.get("Level") or 0) > int(level):
+            continue
+        cid = int(row.get("UnlockCounsellor") or 0)
+        if cid > 0 and cid not in result:
+            result.append(cid)
+    return result
 
 
 def heal_cosmetics(data: dict, now: int | None = None) -> None:

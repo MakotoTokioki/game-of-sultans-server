@@ -443,6 +443,35 @@ def action_full_state(payload: dict, player: Player, session: Session, store: St
     return out
 
 
+def _heal_counsellor_unlocks(player: Player) -> list[int]:
+    """Persist the viziers the client unlocks from TcLvUpgradeCfg on level-up.
+
+    character.upOfficerScene.lua (the action-10010 callback) reads
+    ``UnlockCounsellor`` and unlocks that vizier locally via
+    ``_ministerMod.setMinisterInfo(id, "IsLock", 0)`` — it never sends an
+    action to the server.  Without mirroring that here, the new vizier is lost
+    on the next login, where the server snapshot wins and RoleCounsellor is
+    back to the starter three.  Ids come only from the original v2 config.
+    """
+    rd = player.data.get("RoleData") if isinstance(player.data.get("RoleData"), dict) else {}
+    rb = player.data.get("RoleBase") if isinstance(player.data.get("RoleBase"), dict) else {}
+    level = int(rd.get("Lv") or rb.get("Lv") or 1)
+    rows = player.data.setdefault("RoleCounsellor", [])
+    if not isinstance(rows, list):
+        rows = []
+        player.data["RoleCounsellor"] = rows
+    have = {int(c.get("CounsellorId") or c.get("Id") or 0)
+            for c in rows if isinstance(c, dict)}
+    added: list[int] = []
+    for cid in defaults.level_unlocked_counsellors(level):
+        if cid in have:
+            continue
+        rows.append(defaults.default_counsellor(cid))
+        have.add(cid)
+        added.append(cid)
+    return added
+
+
 def action_login(payload: dict, player: Player, session: Session, store: Store) -> dict:
     now = _now()
     player.data["SysTime"] = now
@@ -515,6 +544,7 @@ def action_login(payload: dict, player: Player, session: Session, store: Store) 
     # appearance fix reaches returning players too (new accounts already have
     # them from defaults.default_player).
     defaults.heal_cosmetics(player.data, now)
+    _heal_counsellor_unlocks(player)
     store.save(player)
     return player.data
 
@@ -566,6 +596,8 @@ def action_level_up(payload: dict, player: Player, session: Session, store: Stor
     rd["Lv"] = level
     rd["Exp"] = exp
     rb["Lv"] = level
+    # Mirror the client's client-side unlock so it survives the next login.
+    _heal_counsellor_unlocks(player)
     store.save(player)
     return {"NewLevel": level, "GovOverTime": 0, "NewBeautyList": {}}
 
