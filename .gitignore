@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Runtime state (player saves, JWT/RC4 sessions, request/action logs)
+data/players/
+data/sessions.json
+logs/
+
+# Local secrets / env files
+.env
+.env.*
+*.pem
+*.key
+
+# Editor / OS
+.DS_Store
+*.swp
