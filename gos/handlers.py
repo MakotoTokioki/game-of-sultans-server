@@ -3800,6 +3800,45 @@ def _player_vip_row(player: Player) -> dict:
     return v2configs.vip_row(level)
 
 
+def _visit_regen(visit: dict, vip: dict, now: int) -> None:
+    """Server-side time catch-up for Fate and Vitality ("as-of" stamps).
+
+    The client regenerates these locally only while the Find scene is open
+    (_findMod.lua 588-670 / 481-514) and gates the visit on
+    fate >= VisitReduceFate (findScene.lua:1987, config value 2).  A stale
+    persisted Fate=0 therefore permanently shows "insufficient fortune".
+    Regen server-side at the original config rates:
+      Fate     1 / FateCD(900)s,  cap CommonMaxFate(100)
+      Vitality 1 / VitalityCD(1800)s, cap TcVIP[VipLv].MaxVitality
+    Storage keeps epoch "as-of" stamps; _visit_client_slice converts them.
+    """
+    max_fate = _as_int(v2configs.env_value("CommonMaxFate") or 0)
+    cd = _as_int(v2configs.env_value("FateCD") or 900) or 900
+    fate = _as_int(visit.get("Fate") or 0)
+    fate_time = _as_int(visit.get("FateTime") or 0)
+    if max_fate > 0 and fate < max_fate and fate_time > 0:
+        gained = (now - fate_time) // cd
+        if gained > 0:
+            fate = min(max_fate, fate + gained)
+            fate_time += gained * cd  # keep the sub-CD remainder
+            if fate >= max_fate:
+                fate_time = now
+            visit["Fate"], visit["FateTime"] = fate, fate_time
+
+    max_vitality = _as_int(vip.get("MaxVitality") or 0)
+    vcd = _as_int(v2configs.env_value("VitalityCD") or 1800) or 1800
+    vitality = _as_int(visit.get("Vitality") or 0)
+    vitality_time = _as_int(visit.get("VitalityTime") or 0)
+    if max_vitality > 0 and vitality < max_vitality and vitality_time > 0:
+        gained = (now - vitality_time) // vcd
+        if gained > 0:
+            vitality = min(max_vitality, vitality + gained)
+            vitality_time += gained * vcd
+            if vitality >= max_vitality:
+                vitality_time = now
+            visit["Vitality"], visit["VitalityTime"] = vitality, vitality_time
+
+
 def _visit_data(player: Player) -> dict:
     """Persisted VisitData slice; the 10602 callback indexes it directly.
 
@@ -3817,11 +3856,14 @@ def _visit_data(player: Player) -> dict:
     max_vitality = _as_int(vip.get("MaxVitality") or 0)
     now = _now()
     visit.setdefault("Vitality", max_vitality)
-    visit.setdefault("Fate", 0)
+    # Fresh rows start with a full Fortune meter, matching the Vitality seed
+    # (TcVIP[VipLv].MaxVitality).  Value is CommonMaxFate from ConfigEnvSet.
+    visit.setdefault("Fate", _as_int(v2configs.env_value("CommonMaxFate") or 0))
     visit.setdefault("FateTime", now)
     visit.setdefault("VitalityTime", now)
     visit.setdefault("TransferNum", 0)
     visit.setdefault("PraiseGuide", 0)
+    _visit_regen(visit, vip, now)
     return visit
 
 
@@ -3841,6 +3883,15 @@ def action_visit_state(payload: dict, player: Player, session: Session, store: S
     empty RemainList is safe (no VisitData / beauty id is dereferenced).
     """
     visit = _visit_data(player)
+    # 10601 is the actual visit: deduct the original config costs so the
+    # client-side fate >= VisitReduceFate gate stays honest on later visits.
+    now = _now()
+    visit["Fate"] = max(0, _as_int(visit.get("Fate") or 0)
+                        - _as_int(v2configs.env_value("VisitReduceFate") or 0))
+    visit["FateTime"] = now
+    visit["Vitality"] = max(0, _as_int(visit.get("Vitality") or 0)
+                            - _as_int(v2configs.env_value("VisitReduceVitality") or 0))
+    visit["VitalityTime"] = now
     store.save(player)
     out = _visit_client_slice(visit)
     return {
@@ -3870,8 +3921,8 @@ def action_visit_sync(payload: dict, player: Player, session: Session, store: St
     """_findMod.action10604: state sync after a vitality/fate timer tick."""
     visit = _visit_data(player)
     now = _now()
-    visit["VitalityTime"] = now
-    visit["FateTime"] = now
+    # Stamps are "as-of" values; do not reset them on a timer sync or regen
+    # progress is lost.  _visit_data already caught both meters up.
     store.save(player)
     out = _visit_client_slice(visit)
     return {"Fate": out["Fate"], "Vitality": out["Vitality"],

@@ -54,8 +54,10 @@ def test_10602_visit_data_shape() -> None:
     max_vitality = int(v2configs.vip_row(0).get("MaxVitality") or 0)
     check("10602 Vitality comes from TcVIP[VipLv].MaxVitality",
           visit.get("Vitality") == max_vitality, (visit, max_vitality))
-    check("10602 starts with zero Fate/TransferNum/PraiseGuide",
-          (visit["Fate"], visit["TransferNum"], visit["PraiseGuide"]) == (0, 0, 0), visit)
+    check("10602 starts with full Fate from CommonMaxFate",
+          visit["Fate"] == int(v2configs.env_value("CommonMaxFate") or 0), visit)
+    check("10602 starts with zero TransferNum/PraiseGuide",
+          (visit["TransferNum"], visit["PraiseGuide"]) == (0, 0), visit)
     # The client feeds FateTime to tools.common.dateToSec (os.time(table)) and
     # uses VitalityTime as raw seconds in startVitalityTime.  An epoch int in
     # FateTime raises "field 'day' missing in date table" and blocks entry.
@@ -106,7 +108,8 @@ def test_10603_10604_10605_10606_mutate_visit_data() -> None:
     synced = handlers.action_visit_sync({}, player, None, store)
     cd = int(v2configs.env_value("VitalityCD") or 1800)
     check("10604 echoes Fate/Vitality and refreshes timestamps",
-          synced.get("Fate") == 0 and synced.get("Vitality") == max_vitality
+          synced.get("Fate") == int(v2configs.env_value("CommonMaxFate") or 0)
+          and synced.get("Vitality") == max_vitality
           and 0 <= synced["VitalityTime"] < cd
           and isinstance(synced["FateTime"], str), synced)
     transferred = handlers.action_visit_transfer({"Num": 5}, player, None, store)
@@ -124,7 +127,7 @@ def test_stale_epoch_visit_data_is_converted() -> None:
     """The exact persisted devtest row that crashed Find on 2026-11-18."""
     player = make_player("stale_find")
     player.data["VisitData"] = {
-        "Vitality": 3, "Fate": 0, "FateTime": 1794941131,
+        "Vitality": 1, "Fate": 0, "FateTime": 1794941131,
         "VitalityTime": 1794941131, "TransferNum": 0, "PraiseGuide": 0,
     }
     d = handlers.action_visit_info({}, player, None, MemStore())
@@ -136,9 +139,52 @@ def test_stale_epoch_visit_data_is_converted() -> None:
     check("stale epoch VitalityTime becomes a small in-range int",
           0 <= visit["VitalityTime"] < int(v2configs.env_value("VitalityCD") or 1800),
           visit["VitalityTime"])
-    check("stale VisitData is not mutated on the player",
-          player.data["VisitData"]["FateTime"] == 1794941131,
+    # _visit_data regenerates server-side from the as-of stamps using the
+    # original FateCD/VitalityCD rates (900s / 1800s, 1 point per tick).
+    now = handlers._now()
+    fate_cd = int(v2configs.env_value("FateCD") or 900)
+    expected_fate_time = 1794941131 + ((now - 1794941131) // fate_cd) * fate_cd
+    vit_cd = int(v2configs.env_value("VitalityCD") or 1800)
+    expected_vit_time = 1794941131 + ((now - 1794941131) // vit_cd) * vit_cd
+    check("stale row regenerates Fate/Vitality server-side",
+          player.data["VisitData"]["FateTime"] == expected_fate_time
+          and player.data["VisitData"]["Vitality"]
+          == int(v2configs.vip_row(0).get("MaxVitality") or 0)
+          and player.data["VisitData"]["VitalityTime"] >= expected_vit_time,
           player.data["VisitData"])
+    check("stale row now has enough Fate to visit (client gate is 2)",
+          handlers.action_visit_info({}, player, None, MemStore())["VisitData"]["Fate"] >= 2,
+          player.data["VisitData"])
+
+
+def test_10601_deducts_visit_costs() -> None:
+    player = make_player()
+    d = handlers.action_visit_state({}, player, None, MemStore())
+    fate_cost = int(v2configs.env_value("VisitReduceFate") or 0)
+    vit_cost = int(v2configs.env_value("VisitReduceVitality") or 0)
+    seed_fate = int(v2configs.env_value("CommonMaxFate") or 0)
+    check("10601 deducts the config Fate/Vitality visit costs",
+          player.data["VisitData"]["Fate"] == seed_fate - fate_cost
+          and player.data["VisitData"]["Vitality"]
+          == int(v2configs.vip_row(0).get("MaxVitality") or 0) - vit_cost,
+          player.data["VisitData"])
+    check("10601 response echoes the post-deduction Fate",
+          d["Fate"] == player.data["VisitData"]["Fate"], (d, player.data["VisitData"]))
+
+
+def test_10604_preserves_regen_progress() -> None:
+    player = make_player()
+    handlers._visit_data(player)  # seed VisitData before editing
+    now = handlers._now()
+    fate_cd = int(v2configs.env_value("FateCD") or 900)
+    player.data["VisitData"].update({"Fate": 10, "FateTime": now - 5 * fate_cd})
+    d = handlers.action_visit_sync({}, player, None, MemStore())
+    check("10604 does not reset the regen as-of stamp",
+          player.data["VisitData"]["FateTime"] == now - 5 * fate_cd + 5 * fate_cd,
+          player.data["VisitData"])
+    check("10604 reflects regenerated Fate",
+          player.data["VisitData"]["Fate"] == 15 and d["Fate"] == 15,
+          (d, player.data["VisitData"]))
 
 
 def test_10307_jump_conf_map() -> None:
@@ -163,6 +209,8 @@ def main() -> None:
     test_10601_top_level_fields()
     test_10603_10604_10605_10606_mutate_visit_data()
     test_stale_epoch_visit_data_is_converted()
+    test_10601_deducts_visit_costs()
+    test_10604_preserves_regen_progress()
     test_10307_jump_conf_map()
     test_all_find_actions_are_routed()
     print(f"\n{sum(OK)}/{len(OK)} checks passed")
