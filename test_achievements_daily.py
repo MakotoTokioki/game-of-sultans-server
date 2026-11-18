@@ -121,7 +121,7 @@ def test_11302_claim_and_same_day_refusal() -> None:
     check("11302 adds config AwardActivity to RoleActivity",
           d["RoleActivity"] == 10, d)
     check("11302 gain items are config pairs [5,10]",
-          d["GainActivityItem"] == [[5, 10]], d["GainActivityItem"])
+          d["GainActivityItem"] == {"90000": [[5, 10]]}, d["GainActivityItem"])
     check("11302 grants item 5 x10 in RemainList",
           any(r["ItemId"] == 5 and r["Num"] == 10 for r in d["RemainList"]), d["RemainList"])
     check("11302 marks the task claimed",
@@ -223,7 +223,32 @@ def test_main_page_dots_track_claimable_state() -> None:
           handlers._client_red_point(player))
 
 
+def test_claim_response_shapes() -> None:
+    """Device 2026-11-18: flat GainActivityItem crashed L4_1 (index a number),
+    and 15000 without TeamInvite crashed the activityUi listener pairs()."""
+    player = _player()
+    store, session = _stub()
+    handlers._daily_state(player)["counters"]["LevySilver"] = 12
+    d = handlers.action_daily_task_claim({"TaskId": 2}, player, session, store)
+    gain = d.get("GainActivityItem")
+    check("11302 GainActivityItem is an effect-keyed map with '90000'",
+          isinstance(gain, dict) and list(gain.keys()) == ["90000"]
+          and gain["90000"] == [[5, 10]], gain)
+
+    raw = handlers.dispatch("15000", {}, player, session, store)
+    check("15000 heartbeat carries a Lua-safe TeamInvite table",
+          raw.get("TeamInvite") == {}, raw.get("TeamInvite"))
+
+    p2 = _player()
+    handlers._daily_state(p2)
+    p2.data["RoleActivity"] = 10
+    d2 = handlers.action_activity_award_claim({"ActivityAwardId": 1}, p2, session, store)
+    check("11303 echoes Fortune for the chest reward prompt",
+          isinstance(d2.get("Fortune"), int), d2.get("Fortune"))
+
+
 def main() -> None:
+    test_claim_response_shapes()
     test_main_page_dots_track_claimable_state()
     test_11201_all_ids_and_real_metrics()
     test_11202_claim_rules()

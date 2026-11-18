@@ -2139,8 +2139,13 @@ def action_alliance_pack(payload: dict, player: Player, session: Session, store:
 
 
 def action_logout(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """loginMod.action15000 heartbeat: its callback dispatches
+    "updateInviteRedBall" with {teamInvite = Data.TeamInvite} and the
+    activityUi listener pairs() that table unguarded.  Without the key every
+    heartbeat crashed on device.  {} means "no pending team invites".
+    """
     store.save(player)
-    return {}
+    return {"TeamInvite": {}}
 
 
 def action_status(payload: dict, player: Player, session: Session, store: Store) -> dict:
@@ -2668,10 +2673,15 @@ def action_daily_task_claim(payload: dict, player: Player, session: Session, sto
     player.data["RoleActivity"] = int(player.data.get("RoleActivity") or 0) + activity
     state["task_flags"][str(tid)] = 1
     store.save(player)
+    # GainActivityItem must be an effect-keyed MAP, not a flat list: the
+    # 11302 callback passes it to L5_1 (first truthy KEY) and L4_1
+    # (pairs-of-pairs), and dailyTaskScene maps only "90000" -> flowerRain.
+    # A flat [[id,num]] made L4_1 index a bare number and aborted the claim
+    # UI even though the server had already granted the reward.
     return attach_remain_list({
         "TaskId": tid,
         "RoleActivity": player.data["RoleActivity"],
-        "GainActivityItem": pairs,
+        "GainActivityItem": {"90000": pairs},
     }, player, items=bag_ids)
 
 
@@ -2697,8 +2707,12 @@ def action_activity_award_claim(payload: dict, player: Player, session: Session,
     pairs, bag_ids = _grant_award_pairs(player, row.get("AwardItem"))
     state["activity_flags"][str(aid)] = 1
     store.save(player)
+    # dailyTaskScene's chest reward prompt builds extraItem with
+    # Num = A0_3.Fortune; every TcActivityAward chest grants ItemId 7.
+    fortune = sum(int(num) for iid, num in pairs if int(iid) == 7)
     return attach_remain_list(
-        {"ActivityAwardId": aid, "RoleActivity": activity}, player, items=bag_ids,
+        {"ActivityAwardId": aid, "RoleActivity": activity, "Fortune": fortune},
+        player, items=bag_ids,
         resources=[int(p[0]) for p in pairs if int(p[0]) in _REMAIN_LIST_MAP])
 
 
