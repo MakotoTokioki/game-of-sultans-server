@@ -68,8 +68,15 @@ def main() -> None:
     check("11803 kills wave 1 -> oracle wave 2",
           all(a.get(k) == v for k, v in ORACLE_11803.items())
           and a["IsBoxAward"] is False and a["IsComplete"] is False, a)
-    check("11803 RemainList has stage items 9/10",
-          {e["ItemId"] for e in a["RemainList"]} >= {9, 10}, a.get("RemainList"))
+    silver0 = int(p.data["RoleData"]["Silver"])
+    check("11803 RemainList is the oracle trio (10, 2, 9) with granted totals",
+          a["RemainList"] == [{"ItemId": 10, "Num": 3},
+                              {"ItemId": 2, "Num": silver0},
+                              {"ItemId": 9, "Num": 3}], a.get("RemainList"))
+    check("kill grant persisted (stage 1 AwardItem +3/+3)",
+          p.data["RoleData"]["BossScore"] == 3
+          and p.data["RoleData"]["BossCredits"] == 3,
+          (p.data["RoleData"].get("BossScore"), p.data["RoleData"].get("BossCredits")))
     check("attack persisted",
           p.data["BossSingleFight"]["BossId"] == 2
           and p.data["BossSingleFight"]["Attacks"] == {"2": 1})

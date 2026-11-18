@@ -76,9 +76,11 @@ def main() -> None:
     d = forward(10906, {"StudyArray": [1, 2, 3]})
     check("10906 echoes", d.get("StudyArray") == [1, 2, 3], d)
 
-    # 10907 list
+    # 10907 is now the "Dispatch All" button: it returns only the counsellors
+    # newly seated from the 10906 lineup (2 is already seated at position 3).
     d = forward(10907)
-    check("10907 list", d.get("DataList") and d["DataList"][0]["CounsellorId"] == 2, d)
+    check("10907 dispatch seats the pending lineup",
+          {e["CounsellorId"] for e in d.get("DataList", [])} == {1, 3}, d)
 
     # 10101 upgrade counsellor 1
     d = forward(10101, {"CounsellorId": 1, "IsUpTen": False})

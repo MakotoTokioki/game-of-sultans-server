@@ -32,7 +32,8 @@ def main() -> None:
                path=Path(tempfile.mkdtemp()) / "p.json")
     store = SimpleNamespace(save=lambda p: None)
     session = SimpleNamespace(jwt="j", user_id="alliancetest")
-    for action in ("11601", "11603"):
+    handlers._alliance_reset(Path(tempfile.mkdtemp()) / "alliances.json")
+    for action in ("11601",):
         check(f"{action} has a dedicated handler",
               action in handlers.HANDLERS, handlers.HANDLERS.get(action))
         d = handlers.dispatch(action, {}, p, session, store)
@@ -51,6 +52,11 @@ def main() -> None:
               d.get("RefusedList") == [] and d.get("TradeInfo") == [], d)
         check(f"{action} response is json round-trippable",
               json.loads(json.dumps(d)) == d)
+    # 11603 is now the join action; with no union in the registry a random
+    # join must refuse (Code 1 + Info), not open a phantom joined dialog.
+    d = handlers.dispatch("11603", {}, p, session, store)
+    check("11603 refuses a random join when no union exists",
+          isinstance(d.get("_fail"), str) and bool(d["_fail"]), d)
     print(f"\n{sum(ok)}/{len(ok)} checks passed")
     sys.exit(0 if all(ok) else 1)
 

@@ -1410,38 +1410,280 @@ def action_items(payload: dict, player: Player, session: Session, store: Store) 
     return action_full_state(payload, player, session, store)
 
 
-def action_alliance_info(payload: dict, player: Player, session: Session, store: Store) -> dict:
-    """_allianceMod 11601/11603: the callbacks' first unguarded reads are
-    AllianceData.QuitTime / .AllianceId (modules/_allianceMod.lua 4347-4348,
-    3989-3990).  Our previous missing handler fell through to action_full_state,
-    which has no AllianceData, so entering the Alliance page crashed with
-    "attempt to index field 'AllianceData' (a nil value)".  This dev server has
-    no alliance system, so return a neutral no-alliance envelope.  Date-like
-    fields are OMITTED (nil is nil-safe in the client; a non-nil value would be
-    parsed by dateToSec); AllianceWarUTC is 0 because isAllianceWarFire does
-    `now - AllianceWarUTC` unguarded.
+def _alliance_neutral(guid: str) -> dict:
+    """No-alliance envelope for 11601.  AllianceId is OMITTED (Lua 0 is
+    truthy, allianceScene.lua:27-29); ContributionTime is omitted because a
+    numeric 0 crashes the client's dateToNumber (logcat 13:23:56).
     """
-    base = player.data.get("RoleBase") if isinstance(player.data.get("RoleBase"), dict) else {}
-    guid = base.get("AllianceGuid") or player.data.get("AllianceGuid") or ""
-    guid = str(guid) if isinstance(guid, str) else ""
     return {
         "AllianceData": {
-            # AllianceId must be OMITTED, not 0: allianceScene.lua:27-29
-            # branches on its truthiness and Lua 0 is truthy.  The client's own
-            # no-alliance state is AllianceId = nil (_allianceMod.lua 1749).
             "AllianceGuid": guid, "AllianceName": "",
-            "AllianceLv": 0, "AllianceLeader": "", "AlliancePower": 0,
+            "AllianceLv": 1, "AllianceLeader": "", "AlliancePower": 0,
             "FaceBook": "", "AllianceExp": 0, "AllianceFortune": 0,
             "AllianceMemberNum": 0, "Position": 0,
-            "ContributionType": 0, "ContributionTime": 0,
-            "ContributionNum": 0, "ContributionTop": 0,
+            "ContributionType": 0, "ContributionNum": 0, "ContributionTop": 0,
             "InsideNotice": "", "OutsideNotice": "", "QQGroup": "",
             "WeChatNum": "", "IsOpenBoss": 0, "NeedCheck": 0,
-            "ResetPassword": 0, "FlagId": 0,
+            "ResetPassword": 0, "FlagId": 1,
         },
         "AllianceWarOpen": 0, "AllianceWarUTC": 0, "NewWar": 0,
         "LastDamageRole": 0, "RefusedList": [], "TradeInfo": [],
     }
+
+
+# Minimal union registry for 11602 create / 11603 join / 11607 inquire /
+# 11617+11629 rank.  No 116xx response exists in the v7 capture, so the
+# on-disk layout is a dev-server choice; client-visible values come from the
+# request or the original config baseline (TcAllianceLvCfg row 1, level 1;
+# TcAlliancePosition: leader=4, member=1).
+_alliance_lock = threading.RLock()  # nested helpers re-enter it
+_alliance_file = config.DATA_DIR / "alliances.json"
+_alliance_state: dict = {}
+_alliance_loaded = False
+
+
+def _alliance_reset(file_path=None) -> None:
+    """Test hook: isolate/clear the registry."""
+    global _alliance_file, _alliance_loaded
+    with _alliance_lock:
+        if file_path is not None:
+            _alliance_file = file_path
+        _alliance_state.clear()
+        _alliance_loaded = False
+
+
+def _alliance_registry() -> dict:
+    global _alliance_loaded
+    with _alliance_lock:
+        if not _alliance_loaded:
+            try:
+                raw = json.loads(_alliance_file.read_text(encoding="utf-8"))
+            except Exception:
+                raw = {}
+            if isinstance(raw, dict):
+                _alliance_state.update(raw)
+            _alliance_state.setdefault("next_id", 1)
+            _alliance_state.setdefault("items", {})
+            _alliance_loaded = True
+        return _alliance_state
+
+
+def _alliance_save() -> None:
+    with _alliance_lock:
+        tmp = _alliance_file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(_alliance_state, ensure_ascii=False, indent=1),
+                       encoding="utf-8")
+        tmp.replace(_alliance_file)
+
+
+def _alliance_member_of(player: Player) -> tuple:
+    base = player.data.get("RoleBase") if isinstance(player.data.get("RoleBase"), dict) else {}
+    guid = base.get("AllianceGuid") or player.data.get("AllianceGuid")
+    guid = str(guid) if guid else ""
+    alliance = _alliance_registry()["items"].get(guid)
+    if not isinstance(alliance, dict):
+        return None, None
+    membership = (alliance.get("Members") or {}).get(player.uid)
+    if not isinstance(membership, dict):
+        return None, None
+    return guid, membership
+
+
+def _alliance_join_member(alliance: dict, player: Player, position: int) -> dict:
+    rb = player.data.setdefault("RoleBase", {})
+    role = player.data.get("RoleData") if isinstance(player.data.get("RoleData"), dict) else {}
+    membership = {
+        "Position": position,
+        "JoinTime": _game_date_string(),
+        "Power": _as_int(role.get("Power") or rb.get("Power")),
+        "Name": str(rb.get("Nickname") or role.get("Nickname") or ""),
+    }
+    members = alliance.setdefault("Members", {})
+    members[player.uid] = membership
+    alliance["AlliancePower"] = sum(_as_int(m.get("Power")) for m in members.values())
+    rb["AllianceGuid"] = str(alliance.get("AllianceGuid") or "")
+    rb["AllianceId"] = _as_int(alliance.get("AllianceId"))
+    return membership
+
+
+def _alliance_envelope(alliance: dict, membership: dict) -> dict:
+    members = alliance.get("Members") or {}
+    return {
+        "AllianceId": _as_int(alliance.get("AllianceId")),
+        "AllianceGuid": str(alliance.get("AllianceGuid") or ""),
+        "AllianceName": str(alliance.get("AllianceName") or ""),
+        # allianceJoinedDialog.new indexes filterTcData("TcAllianceLvCfg",
+        # {AllianceLv=...}).TopMemberLimit with no nil guard (2110-2131);
+        # level 1 is a real config row, level 0 crashes (logcat 13:23:51).
+        "AllianceLv": max(1, _as_int(alliance.get("AllianceLv"), 1)),
+        "AllianceLeader": str(alliance.get("AllianceLeader") or ""),
+        "AlliancePower": _as_int(alliance.get("AlliancePower")),
+        "AllianceExp": _as_int(alliance.get("AllianceExp")),
+        "AllianceFortune": _as_int(alliance.get("AllianceFortune")),
+        "AllianceMemberNum": len(members),
+        "Position": _as_int(membership.get("Position"), 1),
+        "ContributionType": 0,
+        # dateToNumber parses only "YYYY-MM-DD HH:MM:SS"; a number crashes
+        # with "arithmetic on field 'year'" (logcat 13:23:56).
+        "ContributionTime": str(membership.get("JoinTime") or _game_date_string()),
+        "ContributionNum": 0, "ContributionTop": 0,
+        "InsideNotice": str(alliance.get("InsideNotice") or ""),
+        "OutsideNotice": str(alliance.get("OutsideNotice") or ""),
+        "FaceBook": str(alliance.get("FaceBook") or ""),
+        "QQGroup": str(alliance.get("QQGroup") or ""),
+        "WeChatNum": str(alliance.get("WeChatNum") or ""),
+        "IsOpenBoss": _as_int(alliance.get("IsOpenBoss")),
+        "ApplyNum": _as_int(alliance.get("ApplyNum")),
+        "NeedCheck": _as_int(alliance.get("NeedCheck")),
+        "ResetPassword": 0,
+        "FlagId": max(1, _as_int(alliance.get("FlagId"), 1)),
+        "ExchangeItems": [],
+    }
+
+
+def _alliance_envelope_full(data: dict) -> dict:
+    return {
+        "AllianceData": data,
+        "AllianceWarOpen": 0, "AllianceWarUTC": 0, "NewWar": 0,
+        "LastDamageRole": 0, "RefusedList": [], "TradeInfo": [],
+    }
+
+
+def _alliance_row(alliance: dict, rank: int) -> dict:
+    return {
+        "Rank": rank,
+        "AllianceId": _as_int(alliance.get("AllianceId")),
+        "AllianceGuid": str(alliance.get("AllianceGuid") or ""),
+        "AllianceName": str(alliance.get("AllianceName") or ""),
+        "AllianceLv": max(1, _as_int(alliance.get("AllianceLv"), 1)),
+        "AllianceLeader": str(alliance.get("AllianceLeader") or ""),
+        "AlliancePower": _as_int(alliance.get("AlliancePower")),
+        "AllianceMenNum": len(alliance.get("Members") or {}),
+        "FlagId": max(1, _as_int(alliance.get("FlagId"), 1)),
+        "HadApply": 0,
+        "OutsideNotice": str(alliance.get("OutsideNotice") or ""),
+    }
+
+
+def _alliance_rows() -> list:
+    items = _alliance_registry()["items"]
+    order = sorted(items.values(),
+                   key=lambda a: (_as_int(a.get("AlliancePower")),
+                                  _as_int(a.get("AllianceId"))), reverse=True)
+    return [_alliance_row(a, rank) for rank, a in enumerate(order, 1)]
+
+
+def action_alliance_info(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_allianceMod 11601: alliance state.  A member gets their union's data;
+    everyone else the neutral no-alliance envelope.  Date-like fields are
+    omitted (nil-safe in the client's copy chain).
+    """
+    guid, membership = _alliance_member_of(player)
+    if guid:
+        return _alliance_envelope_full(
+            _alliance_envelope(_alliance_registry()["items"][guid], membership))
+    base = player.data.get("RoleBase") if isinstance(player.data.get("RoleBase"), dict) else {}
+    guid = str(base.get("AllianceGuid") or player.data.get("AllianceGuid") or "")
+    return _alliance_neutral(guid)
+
+
+def action_alliance_join(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_allianceMod 11603: join / apply / random join (random sends {}).
+    With no approval-free union, refuse with Code 1 so the client shows a
+    toast instead of opening a phantom joined dialog.
+    """
+    with _alliance_lock:
+        items = _alliance_registry()["items"]
+        guid, membership = _alliance_member_of(player)
+        if guid:
+            out = _alliance_envelope_full(_alliance_envelope(items[guid], membership))
+            out["IsJoin"] = 1
+            return out
+        target = str(payload.get("AllianceGuid") or "").strip()
+        if not target:
+            candidates = [g for g, a in items.items() if not _as_int(a.get("NeedCheck"))]
+            if not candidates:
+                return {"_fail": "No union available right now"}
+            target = random.choice(candidates)
+            alliance = items[target]
+        else:
+            alliance = items.get(target)
+            if not isinstance(alliance, dict):
+                return {"_fail": "Union not found"}
+            if _as_int(alliance.get("NeedCheck")):
+                return {"IsJoin": 0,
+                        "AllianceData": _alliance_envelope(
+                            alliance, {"Position": 1, "JoinTime": _game_date_string()})}
+        membership = _alliance_join_member(alliance, player, position=1)
+        _alliance_save()
+        store.save(player)
+        out = _alliance_envelope_full(_alliance_envelope(alliance, membership))
+        out["IsJoin"] = 1
+        return out
+
+
+def action_alliance_create(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_allianceMod 11602 {Name, ...}: create a union.  Success carries
+    AlreadyJoin 0 + a full AllianceData envelope; already-a-member returns
+    AlreadyJoin 1 (the client just closes the form).
+    """
+    if _alliance_member_of(player)[0]:
+        return {"AlreadyJoin": 1}
+    name = str(payload.get("Name") or "").strip()
+    if not name:
+        return {"_fail": "empty union name"}
+    with _alliance_lock:
+        registry = _alliance_registry()
+        alliance_id = _as_int(registry.get("next_id"), 1)
+        registry["next_id"] = alliance_id + 1
+        rb = player.data.setdefault("RoleBase", {})
+        role = player.data.get("RoleData") if isinstance(player.data.get("RoleData"), dict) else {}
+        alliance = {
+            "AllianceId": alliance_id,
+            "AllianceGuid": f"a{alliance_id}",
+            "AllianceName": name,
+            "AllianceLv": 1,
+            "AllianceLeader": str(rb.get("Nickname") or role.get("Nickname") or ""),
+            "AllianceExp": 0, "AllianceFortune": 0,
+            "AlliancePower": _as_int(role.get("Power") or rb.get("Power")),
+            "FaceBook": str(payload.get("FaceBook") or ""),
+            "InsideNotice": str(payload.get("InsideNotice") or ""),
+            "OutsideNotice": str(payload.get("OutsideNotice") or ""),
+            "NeedCheck": 1 if _as_int(payload.get("NeedCheck")) else 0,
+            "Password": str(payload.get("Password") or ""),
+            "FlagId": max(1, _as_int(payload.get("FlagId"), 1)),
+            "QQGroup": "", "WeChatNum": "", "IsOpenBoss": 0, "ApplyNum": 0,
+            "Members": {},
+        }
+        registry["items"][alliance["AllianceGuid"]] = alliance
+        membership = _alliance_join_member(alliance, player, position=4)  # leader
+        _alliance_save()
+        store.save(player)
+        return {"AlreadyJoin": 0,
+                "AllianceData": _alliance_envelope(alliance, membership)}
+
+
+def action_alliance_rank(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_allianceMod 11617: allianceRankingDialog.new reads #AllianceLvRank
+    unguarded (569-570).  An empty list renders the dialog's empty prompt.
+    """
+    return {"AllianceLvRank": _alliance_rows()}
+
+
+def action_alliance_rank_all(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_allianceMod 11629: show-all toggle copies AllianceData into ranks."""
+    return {"AllianceData": _alliance_rows()}
+
+
+def action_alliance_inquire(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_allianceMod 11607 {AllianceId}: inquire-by-id; response Data is the
+    union row drawn verbatim.  Unknown ids refuse with Code 1.
+    """
+    alliance_id = _as_int(payload.get("AllianceId"))
+    for alliance in _alliance_registry()["items"].values():
+        if _as_int(alliance.get("AllianceId")) == alliance_id:
+            return _alliance_row(alliance, 1)
+    return {"_fail": "Union not found"}
 
 
 def action_item_jump(payload: dict, player: Player, session: Session, store: Store) -> dict:
@@ -4005,6 +4247,25 @@ def _boss_single_max_stage() -> int:
     return max((int(r.get("Stage") or 0) for r in _boss_single_rows()), default=0)
 
 
+def _boss_single_kill_award(stage: int) -> dict:
+    """Guaranteed hunting currencies for a wave kill (TcBossSingle.AwardItem).
+
+    Each wave leads with weight-100 drops for item 9 (BossCredits) and
+    10 (BossScore); stage 1 = +3/+3, exactly the v7 oracle's captured kill.
+    Sub-100 chance groups are not granted (no sourcing for the roll).
+    """
+    award: dict[int, int] = {}
+    for group in _boss_single_wave(stage).get("AwardItem") or []:
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            if (isinstance(item, (list, tuple)) and len(item) >= 3
+                    and int(item[2] or 0) == 100 and int(item[0] or 0) in (9, 10)):
+                iid = int(item[0])
+                award[iid] = award.get(iid, 0) + int(item[1] or 0)
+    return award
+
+
 _BOSS_SINGLE_STATE_KEY = "BossSingleFight"
 
 
@@ -4099,15 +4360,21 @@ def action_instance_boss_attack(payload: dict, player: Player, session: Session,
             pass
     hp = max(0, hp - int(math.floor(damage)))
     attacks[str(counsellor_id)] = 1
+    role_data = player.data.setdefault("RoleData", {})
     if hp > 0:
         state["BossHP"] = hp
     else:
-        nxt = int(state.get("BossId") or 0) + 1
+        killed = int(state.get("BossId") or 0)
+        nxt = killed + 1
         row = _boss_single_wave(nxt)
         if row and nxt <= _boss_single_max_stage():
             state["BossId"], state["BossHP"] = nxt, int(row.get("HP") or 0)
         else:
             state["BossId"], state["BossHP"] = 0, 0
+        # Kill reward: the wave's guaranteed AwardItem currencies.
+        for iid, num in _boss_single_kill_award(killed).items():
+            key = "BossScore" if iid == 10 else "BossCredits"
+            role_data[key] = int(role_data.get(key) or 0) + num
     complete = int(state.get("BossId") or 0) == 0
     wave = _boss_single_wave(state.get("BossId") or 0) if not complete else {}
     store.save(player)
@@ -4120,8 +4387,17 @@ def action_instance_boss_attack(payload: dict, player: Player, session: Session,
         "IsComplete": bool(complete),
         "IsBoxAward": False,
         "RecoverCountList": [{"MinisterId": counsellor_id, "RecoverCount": 0}],
+        # v7 oracle trio, exact order (v7_actions.jsonl 220).  The client
+        # derives +N from the absolute Num itself; any OTHER row would be
+        # appended to the kill popup's icon list and could nil-crash its
+        # table.sort, so do NOT use attach_remain_list here.
+        "RemainList": [
+            {"ItemId": 10, "Num": int(role_data.get("BossScore") or 0)},
+            {"ItemId": 2, "Num": int(role_data.get("Silver") or 0)},
+            {"ItemId": 9, "Num": int(role_data.get("BossCredits") or 0)},
+        ],
     }
-    return attach_remain_list(data, player, items=[9, 10])
+    return data
 
 
 # --------------------------------------------------------------------------
@@ -4958,7 +5234,11 @@ HANDLERS = {
     "10306": action_items,
     "10307": action_item_jump,
     "11601": action_alliance_info,
-    "11603": action_alliance_info,
+    "11602": action_alliance_create,
+    "11603": action_alliance_join,
+    "11607": action_alliance_inquire,
+    "11617": action_alliance_rank,
+    "11629": action_alliance_rank_all,
     "10308": action_items,
     "10309": action_items,
     "10391": action_items,
