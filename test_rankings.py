@@ -205,10 +205,9 @@ def test_v2_red_point_keys_are_numeric() -> None:
     (competitionRank, ranking, arena, ...) distinct from the v7 capture keys.
     """
     rp = handlers._client_red_point()
-    for key in ("competitionRank", "ranking", "arena", "school", "vip",
-                "boss", "dailyTask", "achievement"):
-        check(f"red point {key!r} is numeric",
-              isinstance(rp.get(key), int), rp.get(key))
+    for key in ("HaloCounsellorRankChange", "SpiritPetRankChange",
+                "SpiritPetStage", "FbFansFeedback", "SpecialDiscount", "boss"):
+        check(f"static red point {key!r} is 1", rp.get(key) == 1, rp.get(key))
     check("all red point values are numbers",
           all(isinstance(v, int) for v in rp.values()), rp)
     # redPointMod.updateRedPoint does string.find(key, ":") + 1 on any "uni*"
@@ -220,9 +219,14 @@ def test_v2_red_point_keys_are_numeric() -> None:
     requester, _rival, store, _session = _fixture()
     d = handlers.attach_task_progress(
         handlers.action_rank_info({}, requester, None, store), requester)
-    check("rank response carries the full numeric red point map",
+    check("rank response carries a numeric red point table",
           isinstance(d.get("RedPoint"), dict)
           and all(isinstance(v, int) for v in d["RedPoint"].values()),
+          d.get("RedPoint"))
+    check("Quest/Achievement dots track real claimable state",
+          ("dailyTask" in d["RedPoint"]) == handlers._daily_task_red_point(requester)
+          and ("achievement" in d["RedPoint"])
+          == handlers._achievement_red_point(requester),
           d.get("RedPoint"))
 
 

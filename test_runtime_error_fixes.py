@@ -45,11 +45,12 @@ def _session() -> SimpleNamespace:
                            server_id=1, app_id=1020)
 
 
-# The 8 red-point keys/values every v7 action response carries; the same dict
-# the dev server has always returned for action 11901.
+# Static activity dots captured from v7.  dailyTask/achievement are
+# presence-driven on the v2 main page and only present when genuinely
+# claimable (handlers._daily_task_red_point / _achievement_red_point).
 RED_POINT_KEYS = {
     "HaloCounsellorRankChange", "SpiritPetRankChange", "SpiritPetStage",
-    "FbFansFeedback", "SpecialDiscount", "boss", "dailyTask", "achievement",
+    "FbFansFeedback", "SpecialDiscount", "boss",
 }
 
 
@@ -75,9 +76,13 @@ def test_every_action_response_carries_red_point() -> None:
         rp = wire.get("RedPoint")
         check("%s action response has RedPoint dict" % action,
               isinstance(rp, dict), (action, rp))
-        check("%s RedPoint retains the 8 captured v7 keys" % action,
+        check("%s RedPoint retains the captured static keys" % action,
               isinstance(rp, dict) and RED_POINT_KEYS <= set(rp),
               (action, None if rp is None else sorted(rp)))
+        check("%s Quest/Achievement dots match claimable state" % action,
+              ("dailyTask" in rp) == handlers._daily_task_red_point(player)
+              and ("achievement" in rp)
+              == handlers._achievement_red_point(player), (action, rp))
         check("%s RedPoint values are Lua-safe numbers (no nil)" % action,
               isinstance(rp, dict)
               and all(isinstance(v, int) for v in rp.values()),

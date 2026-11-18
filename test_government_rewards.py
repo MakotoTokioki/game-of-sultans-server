@@ -148,7 +148,13 @@ def test_no_grants_govachievement_exp() -> None:
                                            _session(), _store())
     check("no grants +GovAchievement EXP", int(role["Exp"]) - before_exp == achievement,
           (role["Exp"], before_exp, achievement))
-    check("no grant is +1 at Lv1", achievement == 1, achievement)
+    level = int(role.get("Lv") or 1)
+    cfg_achievement = next(
+        int(r.get("GovAchievement") or 0)
+        for r in v2configs.load("TcLvUpgradeCfg")
+        if int(r.get("Level") or 0) == level)
+    check("No grant equals TcLvUpgradeCfg[Lv].GovAchievement",
+          achievement == cfg_achievement, (level, achievement, cfg_achievement))
     check("no puts ItemId 5 (EXP) first with absolute total",
           res["RemainList"][0] == {"ItemId": 5, "Num": before_exp + achievement},
           res["RemainList"][0])
@@ -194,9 +200,10 @@ def test_repeated_calls_and_cooldown_anchor_unchanged() -> None:
               (role["GovTimeUTC"], anchor + index * cd))
         check("call %d advances EventId" % index,
               res["EventId"] == ids[(ids.index(first) + index) % len(ids)], res["EventId"])
+    achievement = int(float(role["GovAchievement"]))
     check("no cooldown refusal added: repeated calls keep granting",
-          int(role["Exp"]) == int(_devtest_data()["RoleData"]["Exp"]) + 3,
-          role["Exp"])
+          int(role["Exp"]) == int(_devtest_data()["RoleData"]["Exp"]) + 3 * achievement,
+          (role["Exp"], achievement))
 
 
 def test_reward_amounts_come_only_from_config() -> None:

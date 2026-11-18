@@ -505,6 +505,12 @@ def action_login(payload: dict, player: Player, session: Session, store: Store) 
         player.data["Activity"] = activity
     if not activity.get("CompetitionRank"):
         activity["CompetitionRank"] = [{"Id": i, "Version": 0} for i in (1, 2, 3)]
+    if not activity.get("TimeLimitActivity"):
+        # Same official 1..9 queue (see defaults.py); existing accounts need
+        # it too or the 11901 TimeLimitCfg listener never runs.
+        activity["TimeLimitActivity"] = [
+            {"Id": i, "Version": 0} for i in range(1, 10)
+        ]
     # _mainTaskMod.init reads only tbData.MainTask; mainTaskProgress is the
     # authoritative persisted counter.  Keeping them in sync here prevents
     # the client from restarting the quest chain at an old TaskId.
@@ -648,46 +654,83 @@ def action_task(payload: dict, player: Player, session: Session, store: Store) -
 # 21:47:28-34 UTC+3.  Serve the same original dict on every response; no new
 # values are invented (this is the very map the dev server already sends for
 # 11901 and that the v7 capture shows on every action).
-def _client_red_point() -> dict[str, int]:
-    """Numeric red-point map for both v7 and v2 clients.
+# --- Main-page red dots (redPointMod.lua) ----------------------------------
+# net/dataNetMod.lua 636-642 hands Data.RedPoint to redPointMod.refreshRedPoint
+# on EVERY action response.  refreshRedPoint (redPointMod.lua 258-369) loops a
+# fixed key list and dispatches updateRedBall with isShow = whether the key is
+# PRESENT in the map (line 324: `if L8_2 then L7_2 = true end`) -- the value is
+# ignored there.  So a key sent as 0 STILL lights its dot; only OMITTING it
+# hides the dot.  The main scene create instead uses updateRedPoint (215-254),
+# where isShow = (value == 1).  The official capture varies the key set per
+# action accordingly.  Our previous ~70-key all-present map force-lit every
+# dot (including dailyTask/achievement) even with nothing claimable.
+# The v2 main-page Quest/Achievement dots are the bottom-bar entries with
+# red_name "dailyTask"/"achievement" (mainUi.bottomActiveDialog.lua 11/35).
+def _daily_task_red_point(player: Player) -> bool:
+    """Mirror _dailyTaskMod.updateRedPoint (133-172): claimable daily task."""
+    state = _daily_state(player)
+    for row in _daily_task_rows():
+        tid = int(row.get("TaskId") or 0)
+        if int(state["task_flags"].get(str(tid)) or 0):
+            continue
+        key = _DAILY_TASK_KEYS.get(tid, "")
+        current = int(state["counters"].get(key) or 0) if key else 0
+        need = int(row.get("RequireNum") or 0)
+        if need > 0 and current >= need:
+            return True
+    activity = int(player.data.get("RoleActivity") or 0)
+    for row in _activity_award_rows():
+        aid = int(row.get("ActivityAwardId") or 0)
+        if int(state["activity_flags"].get(str(aid)) or 0):
+            continue
+        if activity >= int(row.get("RequireActivity") or 0):
+            return True
+    return False
 
-    The v2 client (redPointMod.lua) reads keys such as ``competitionRank``,
-    ``ranking``, ``arena``, ``school`` … which are absent from the v7 capture
-    map.  myWidget's tab selectIndex path does ``0 < redPoint[key]``; a missing
-    key is nil and aborts showOverlay -> the rankings screen crashes with
-    "attempt to compare number with nil".  Every key the v2 client can look up
-    must therefore be present as a real number.  Zero means "no red dot" for
-    activities this dev server does not run; v7 keys keep their captured 1.
+
+def _achievement_red_point(player: Player) -> bool:
+    """Mirror _achieveMod.getIsRedShow (9-28): claimable achievement stage."""
+    current = _achievement_current(player)
+    stages = player.data.get("AchievementStages") or {}
+    rows_by_aid: dict[int, list[dict]] = {}
+    for row in _achievement_award_rows():
+        aid = int(row.get("AchievementId") or 0)
+        if aid:
+            rows_by_aid.setdefault(aid, []).append(row)
+    for aid, rows in rows_by_aid.items():
+        stored = int(stages.get(str(aid)) or 0)
+        max_stage = max(int(r.get("Stage") or 0) for r in rows)
+        if stored >= max_stage:
+            continue
+        row = next((r for r in rows
+                    if int(r.get("Stage") or 0) == stored + 1), None)
+        if row is None:
+            continue
+        if int(current.get(aid) or 0) >= int(row.get("RequireNum") or 0):
+            return True
+    return False
+
+
+def _client_red_point(player: Player | None = None) -> dict[str, int]:
+    """Red-point map for v7 + v2 clients.  Presence drives the dots.
+
+    The six static keys are the always-on activity dots in the v7 capture.
+    dailyTask/achievement are attached only when real claimable state says so
+    and OMITTED otherwise.  All other v2 keys stay absent: client mods manage
+    them, and sending them (even as 0) force-lights their dots.  No "uni*" key
+    may ever be produced: refreshRedPoint's copy loop does
+    string.find(key, ":") + 1 for uni* (redPointMod.lua 284-297).
     """
     point = {
         "HaloCounsellorRankChange": 1, "SpiritPetRankChange": 1,
         "SpiritPetStage": 1, "FbFansFeedback": 1, "SpecialDiscount": 1,
-        "boss": 1, "dailyTask": 1, "achievement": 1,
+        "boss": 1,
     }
-    v2_keys = (
-        "vip", "arena", "school", "marry", "visit", "accountBinding",
-        # "uni" is deliberately absent: v2 redPointMod's updateRedPoint does
-        # string.find(key, ":") + 1 for any "uni*" key (official keys are
-        # "uni:<allianceId>"). A bare "uni" makes that nil+1 and crashes the
-        # main scene before it can render.
-        "recharge", "lifanyuan", "boa", "lam", "Hor", "friendReq",
-        "friendAdded", "TimeLimitSynthesis", "Val", "Inf",
-        "customerResponse", "DinnerSelf", "CrossWarPersonalDamageRank",
-        "CrossWarAllianceScoreRank", "CrossWarGateAwardRank",
-        "MarketingLuckyDraw", "MarketingLogin", "MarketingGroupBuy",
-        "CrossWarAchievementSingle", "CrossWarAchievementAlliance",
-        "CrossWarFeastHasReward", "CrossWarCheerAward", "Ram", "Gro",
-        "PlayerComebackHasRecallAward", "competitionRank", "timeLimit",
-        "MinisterExchange2", "MinisterExchange3", "CrossCompetitionRank",
-        "CrossCompetitionRankDetail", "ranking", "card", "alliance",
-        "cityAward", "exp", "harem", "home", "item", "like", "mail",
-        "marketing", "minister", "ramadanAchievement", "ramadanMarket",
-        "ramadanRank", "recall", "sea", "seakingAchievement", "seakingRank",
-        "seakingStorage", "sevenLogin", "shop", "sign", "updatePrize",
-        "vedio",
-    )
-    for key in v2_keys:
-        point.setdefault(key, 0)
+    if player is not None:
+        if _daily_task_red_point(player):
+            point["dailyTask"] = 1
+        if _achievement_red_point(player):
+            point["achievement"] = 1
     return point
 
 
@@ -704,7 +747,7 @@ def attach_task_progress(data: dict, player: Player) -> dict:
     data["SysTime"] = _now()
     # Must be set before the early-return below: red-point values need to be
     # real numbers (never nil) for the client's Lua tab comparisons.
-    data["RedPoint"] = _client_red_point()
+    data["RedPoint"] = _client_red_point(player)
     try:
         taskId = int(tasks.get_task_id(player.data))
         taskNum = int(tasks.get_task_num(player.data))
@@ -1384,7 +1427,10 @@ def action_alliance_info(payload: dict, player: Player, session: Session, store:
     guid = str(guid) if isinstance(guid, str) else ""
     return {
         "AllianceData": {
-            "AllianceId": 0, "AllianceGuid": guid, "AllianceName": "",
+            # AllianceId must be OMITTED, not 0: allianceScene.lua:27-29
+            # branches on its truthiness and Lua 0 is truthy.  The client's own
+            # no-alliance state is AllianceId = nil (_allianceMod.lua 1749).
+            "AllianceGuid": guid, "AllianceName": "",
             "AllianceLv": 0, "AllianceLeader": "", "AlliancePower": 0,
             "FaceBook": "", "AllianceExp": 0, "AllianceFortune": 0,
             "AllianceMemberNum": 0, "Position": 0,
@@ -2331,6 +2377,14 @@ _COMPETITION_RANK_SCHEDULE: dict[int, tuple[str, str]] = {
 }
 _COMPETITION_RANK_ACTIVITY_TYPE: dict[int, int] = {1: 1, 2: 2, 3: 13}
 
+# The official 11901 TimeLimitCfg body is truncated in every v7 capture (the
+# log prints only the bare "TimeLimitCfg" name nine times, once per requested
+# id).  The only original window we can quote is the longest one served in the
+# same capture's CompetitionRankCfg[3] (2026-11-16 .. 2026-11-21).  Reusing it
+# here is a documented JUDGMENT CALL, not a verified TimeLimit schedule; the
+# icon disappears after EndTime unless a newer capture is obtained.
+_TIME_LIMIT_SCHEDULE = ("2026-11-16 00:00:00", "2026-11-21 21:59:59")
+
 # _settingCatchMod.lua registers one descriptor per activity config.  The
 # official 11901 response carries ALL of these "<name>" keys (verified in the
 # v7 capture).  We previously returned only CompetitionRankCfg (+CrossChat),
@@ -2360,6 +2414,16 @@ def action_11901(payload: dict, player: Player, session: Session, store: Store) 
                 ids.append(int(item))
             except (TypeError, ValueError):
                 continue
+    # _settingCatchMod queues TimeLimitActivity ids from the login Activity
+    # slice (defaults.py advertises 1..9, matching the official capture).
+    tl_ids: list[int] = []
+    tl_requested = payload.get("TimeLimitActivity")
+    if isinstance(tl_requested, list):
+        for item in tl_requested:
+            try:
+                tl_ids.append(int(item))
+            except (TypeError, ValueError):
+                continue
     # _settingCatchMod's listeners iterate every "<name>Cfg" key on the
     # response; a missing key is nil and breaks pairs()/indexing mid-chain.
     # Always return the full original-shaped envelope, even when no ids were
@@ -2368,7 +2432,27 @@ def action_11901(payload: dict, player: Player, session: Session, store: Store) 
     # Kept from the earlier chat fix: _chatMod.setCrossChat reads the bare
     # CrossChat key as well as CrossChatCfg; sending both is harmless.
     envelope["CrossChat"] = []
-    if not ids:
+    # _limitTimeMod.dataDeal (the TimeLimitCfg listener) reads the companion
+    # progress keys; empty tables are the same neutral values 10000 carries,
+    # so no progress or reward is invented.
+    envelope["TimeLimitComplete"] = {}
+    envelope["TimeLimitAwardGet"] = {}
+    if tl_ids:
+        # ActivityType doubles as the TcLimitedActivity row id on the client
+        # (card art / title lookup) and must be numeric for check_activity_state
+        # sorting.  Identity mapping Id -> ActivityType stays within the
+        # original config's 1..24 rows (judgment call: official mapping unknown).
+        envelope["TimeLimitCfg"] = {
+            str(i): {
+                "Id": i,
+                "ActivityType": i,
+                "StartTime": _TIME_LIMIT_SCHEDULE[0],
+                "EndTime": _TIME_LIMIT_SCHEDULE[1],
+                "AwardCfg": {},
+            }
+            for i in dict.fromkeys(tl_ids)
+        }
+    if not ids and not tl_ids:
         return envelope
     # saveRouteSetting indexes response["CompetitionRankCfg"][tostring(Id)] for
     # every requested id, so the table must exist even when all ids are
@@ -2895,10 +2979,28 @@ def action_diplomacy_friends(payload: dict, player: Player, session: Session, st
 
 
 def action_wives_guide(payload: dict, player: Player, session: Session, store: Store) -> dict:
-    """_wifeCompeteMod action18100 {SysId}: the callback compares
-    roleMod.getRoleData("SysGuid") < A0_3.SysGuid, so echo the stored mask
-    (0 = no guide seen yet; the client then stores it locally)."""
-    return {"SysGuid": int(player.data.get("SysGuid") or 0)}
+    """_wifeCompeteMod action18100 {SysId}: set the requested system-guide bit
+    in the persisted RoleData.SysGuid mask.
+
+    The client tests guide N via roleMod.judgeIsGuided/unlockRule: bit N from
+    the LSB of RoleData.SysGuid (roleMod.lua 225-248).  The 18100 callback
+    (_wifeCompeteMod.lua 793-801) adopts the response only when
+    getRoleData("SysGuid") < response.SysGuid; echoing 0 forever made the
+    Social/diplomacy tutorial replay on every tab entry (repeated 18100
+    SysId=2 in the action log).  Bits are OR-ed in (1-based from LSB), so the
+    response is monotonically non-decreasing and the adopt guard passes once.
+    """
+    try:
+        sys_id = int(payload.get("SysId") or 0)
+    except (TypeError, ValueError):
+        sys_id = 0
+    role_data = player.data.setdefault("RoleData", {})
+    mask = int(role_data.get("SysGuid") or 0)
+    if 1 <= sys_id <= 31:
+        mask |= 1 << (sys_id - 1)
+        role_data["SysGuid"] = mask
+        store.save(player)
+    return {"SysGuid": mask}
 
 
 # --------------------------------------------------------------------------
@@ -4167,7 +4269,7 @@ def action_appearance_info(payload: dict, player: Player, session: Session, stor
         "AvatarBoxEffectExpireTime": -1,
         "DressTitle": _as_int(base.get("DressTitle") or 0),
         "AvatarList": [dict(e) for e in avatar],
-        "RedPoint": _client_red_point(),
+        "RedPoint": _client_red_point(player),
         "SysTime": now,
     }
 

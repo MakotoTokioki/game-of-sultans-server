@@ -48,7 +48,9 @@ def test_login_advertises_competition_rank() -> None:
     expected = [{"Id": 1, "Version": 0}, {"Id": 2, "Version": 0}, {"Id": 3, "Version": 0}]
     check("login Activity.CompetitionRank entries 1-3",
           activity.get("CompetitionRank") == expected, activity.get("CompetitionRank"))
-    check("no other activity keys advertised", set(activity.keys()) == {"CompetitionRank"}, activity.keys())
+    check("Activity advertises CompetitionRank + TimeLimitActivity",
+          set(activity.keys()) == {"CompetitionRank", "TimeLimitActivity"},
+          activity.keys())
     check("login Activity json-serializable (object, not array)",
           isinstance(json.loads(json.dumps(activity)), dict)
           and json.loads(json.dumps(activity)) == activity)
@@ -145,8 +147,42 @@ def test_11901_bad_requests() -> None:
           sorted((mixed.get("CompetitionRankCfg") or {}).keys()) == ["1", "2", "3"], mixed)
 
 
+def test_time_limit_activity_icon() -> None:
+    """The main-page Time Limited icon needs a queued TimeLimitActivity and a
+    real TimeLimitCfg window (_limitTimeMod.onActivity -> now in [start,end])."""
+    import re
+    from gos.defaults import default_player
+    data = default_player("timelimittest")
+    queued = data["Activity"].get("TimeLimitActivity") or []
+    check("login advertises TimeLimitActivity 1..9",
+          [int(e.get("Id") or 0) for e in queued] == list(range(1, 10)),
+          queued)
+    check("all queued ids have Version != -1",
+          all(int(e.get("Version") or 0) != -1 for e in queued), queued)
+    d = handlers.action_11901({"TimeLimitActivity": [1, 2, 3]}, None, None, None)
+    cfg = d.get("TimeLimitCfg") or {}
+    check("11901 serves the requested TimeLimitCfg ids",
+          set(cfg) == {"1", "2", "3"}, cfg)
+    first = cfg.get("1") or {}
+    check("TimeLimitCfg has a numeric ActivityType",
+          isinstance(first.get("ActivityType"), int), first)
+    pattern = r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"
+    check("TimeLimitCfg dates are dateToSec-parsable strings",
+          bool(re.match(pattern, str(first.get("StartTime", ""))))
+          and bool(re.match(pattern, str(first.get("EndTime", "")))),
+          first)
+    check("TimeLimitCfg carries no invented awards", first.get("AwardCfg") == {}, first)
+    check("11901 carries neutral progress tables",
+          d.get("TimeLimitComplete") == {} and d.get("TimeLimitAwardGet") == {},
+          d)
+    empty = handlers.action_11901({}, None, None, None)
+    check("no request -> neutral empty TimeLimitCfg (no pairs(nil))",
+          empty.get("TimeLimitCfg") == {}, empty)
+
+
 def main() -> None:
     check("11901 registered in HANDLERS", "11901" in handlers.HANDLERS, handlers.HANDLERS.get("11901"))
+    test_time_limit_activity_icon()
     test_login_advertises_competition_rank()
     test_login_heals_legacy_empty_activity()
     test_11901_config_shape()

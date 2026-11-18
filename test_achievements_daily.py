@@ -193,7 +193,35 @@ def test_counters_from_existing_handlers() -> None:
           metrics)
 
 
+def test_main_page_dots_track_claimable_state() -> None:
+    """Main-page dots are RedPoint keys; presence lights them
+    (mainUi.bottomActiveDialog.lua 11/35, redPointMod.lua 324)."""
+    player = _player()
+    store, session = _stub()
+    rp = handlers._client_red_point(player)
+    # Fresh account: daily counters are zero, but achievement stage 1 of
+    # sign-in (CheckInDay=1) and power (Power>=1000) is claimable.
+    check("fresh account has no Quests dot", "dailyTask" not in rp, rp)
+    check("fresh account has an Achievements dot when a stage is claimable",
+          "achievement" in handlers._client_red_point(player), rp)
+    state = handlers._daily_state(player)
+    state["counters"]["LevySilver"] = 12  # task 2 RequireNum == 12
+    check("completed unclaimed daily task lights the Quests dot",
+          handlers._client_red_point(player).get("dailyTask") == 1,
+          handlers._client_red_point(player))
+    d = handlers.action_daily_task_claim({"TaskId": 2}, player, session, store)
+    check("task claim succeeds", "_fail" not in d, d.get("_fail"))
+    # The activity milestone (RoleActivity >= 10) may still be claimable;
+    # draining everything must turn the dot off.
+    handlers.action_activity_award_claim({"ActivityAwardId": 1},
+                                         player, session, store)
+    check("claiming the activity milestone turns the Quests dot off",
+          "dailyTask" not in handlers._client_red_point(player),
+          handlers._client_red_point(player))
+
+
 def main() -> None:
+    test_main_page_dots_track_claimable_state()
     test_11201_all_ids_and_real_metrics()
     test_11202_claim_rules()
     test_11301_shape()

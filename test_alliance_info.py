@@ -39,9 +39,10 @@ def main() -> None:
         data = d.get("AllianceData")
         check(f"{action} carries an AllianceData table",
               isinstance(data, dict), d)
+        check(f"{action} omits AllianceId (nil = no alliance; Lua 0 is truthy)",
+              "AllianceId" not in data, data)
         check(f"{action} is a neutral no-alliance state",
-              data.get("AllianceId") == 0 and data.get("AllianceName") == ""
-              and data.get("AllianceGuid") == "", data)
+              data.get("AllianceName") == "" and data.get("AllianceGuid") == "", data)
         check(f"{action} omits date-like fields (nil is client-safe)",
               "QuitTime" not in data and "LastExchangeTime" not in data, data)
         check(f"{action} includes war timestamp 0 (unguarded arithmetic)",

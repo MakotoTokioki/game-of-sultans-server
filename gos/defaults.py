@@ -290,6 +290,15 @@ def default_player(uid: str, nickname: str = "Sultan") -> dict:
                 {"Id": 2, "Version": 0},
                 {"Id": 3, "Version": 0},
             ],
+            # Official 10000 capture (recon/v7-capture/session-20261116-093154.log)
+            # advertises TimeLimitActivity ids 1..9 here with Version 0.
+            # _settingCatchMod.start queues every entry whose Version ~= -1,
+            # so the client then requests them in 11901 and _limitTimeMod's
+            # TimeLimitCfg listener can run -> the main-page time-limited icon
+            # becomes visible.
+            "TimeLimitActivity": [
+                {"Id": i, "Version": 0} for i in range(1, 10)
+            ],
         },
         # scalar flags
         "RechargeAmount": 0,
