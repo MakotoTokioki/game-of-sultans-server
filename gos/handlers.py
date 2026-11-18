@@ -3873,18 +3873,20 @@ def _boss_single_state(player: Player) -> dict:
     return state
 
 
-def _boss_single_complete(player: Player) -> int:
+def _boss_single_complete(player: Player) -> bool:
+    """Return a REAL boolean: the client does `if data.bossSingleComplete then`
+    and Lua treats 0 as truthy, which showed 'congratulations, completed'
+    on the very first entry.  The v7 oracle sends JSON false here."""
     state = player.data.get(_BOSS_SINGLE_STATE_KEY)
     if not isinstance(state, dict):
-        return 0
+        return False
     if state.get("Day") != _game_time().strftime("%Y-%m-%d"):
-        return 0
-    # Do NOT use `state.get("BossId") or -1`: 0 is falsy in Python and would
-    # turn the completed marker into -1.  Only None/missing is "not recorded".
+        return False
+    # Do NOT use `state.get("BossId") or -1`: 0 is falsy in Python.
     raw = state.get("BossId")
     if raw is None:
-        return 0
-    return 1 if int(raw) == 0 else 0
+        return False
+    return int(raw) == 0
 
 
 def action_instance_boss_info(payload: dict, player: Player, session: Session, store: Store) -> dict:
@@ -3906,7 +3908,10 @@ def action_instance_boss_info(payload: dict, player: Player, session: Session, s
         "BossHPMax": 0 if complete else int(wave.get("HP") or 0),
         "CounsellorAttackData": dict(state.get("Attacks") or {}),
         "RecoverCountList": [], "BoxRewardList": [],
-        "BossSingleComplete": 1 if complete else 0,
+        # Lua truthiness: 0 is truthy, so a real boolean is required here
+        # (the v7 oracle sends false).  Otherwise the dialog opens straight
+        # into the "congratulations, completed today's hunting" screen.
+        "BossSingleComplete": bool(complete),
     }
 
 
@@ -3956,8 +3961,9 @@ def action_instance_boss_attack(payload: dict, player: Player, session: Session,
         "BossHP": int(state.get("BossHP") or 0),
         "BossHPMax": int(wave.get("HP") or 0),
         "CounsellorAttackData": dict(attacks),
-        "IsComplete": 1 if complete else 0,
-        "IsBoxAward": 0,
+        # Same Lua-truthiness rule as BossSingleComplete (oracle sends false).
+        "IsComplete": bool(complete),
+        "IsBoxAward": False,
         "RecoverCountList": [{"MinisterId": counsellor_id, "RecoverCount": 0}],
     }
     return attach_remain_list(data, player, items=[9, 10])

@@ -56,15 +56,18 @@ def main() -> None:
     check("11802 dispatch returns boss state (no full-state fallthrough)",
           d.get("BossId") == 1 and d.get("BossHPMax") == 20010, d)
     check("11802 first entry matches oracle",
-          all(d.get(k) == v for k, v in ORACLE_11802.items()) and d["BossSingleComplete"] == 0,
+          all(d.get(k) == v for k, v in ORACLE_11802.items()) and d["BossSingleComplete"] is False,
           d)
+    check("11802 booleans are JSON booleans (Lua 0 is truthy)",
+          d["BossSingleComplete"] is False
+          and json.loads(json.dumps(d))["BossSingleComplete"] is False, d)
     check("11802 json round-trippable", json.loads(json.dumps(d)) == d)
 
     a = handlers.action_instance_boss_attack({"CounsellorId": 2, "IsHeadShot": 0},
                                              p, session, store)
     check("11803 kills wave 1 -> oracle wave 2",
           all(a.get(k) == v for k, v in ORACLE_11803.items())
-          and not a["IsBoxAward"] and not a["IsComplete"], a)
+          and a["IsBoxAward"] is False and a["IsComplete"] is False, a)
     check("11803 RemainList has stage items 9/10",
           {e["ItemId"] for e in a["RemainList"]} >= {9, 10}, a.get("RemainList"))
     check("attack persisted",
@@ -88,9 +91,9 @@ def main() -> None:
           and z["IsComplete"] == 1, z)
     d2 = handlers.action_instance_boss_info({}, p, session, store)
     check("11802 after completion shows complete",
-          d2["BossId"] == 0 and d2["BossSingleComplete"] == 1, d2)
+          d2["BossId"] == 0 and d2["BossSingleComplete"] is True, d2)
     check("11801 mirrors completion",
-          handlers.action_instance_info({}, p, session, store)["BossSingleComplete"] == 1)
+          handlers.action_instance_info({}, p, session, store)["BossSingleComplete"] is True)
 
     p2 = _player()
     p2.data["BossSingleFight"] = {
