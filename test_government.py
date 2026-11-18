@@ -166,7 +166,39 @@ def test_restore_and_lua_safe_types() -> None:
               ("RemainList", "Achievement", "MiracleTrigger")), d)
 
 
+def test_config_values_track_sultan_level() -> None:
+    """GovAchievement (No-button EXP), rate and capacity are level-indexed.
+
+    A setdefault seed left them at level-1 values forever, so levelling up
+    never increased the affair reward.
+    """
+    player = _player()
+    store, session = _stub()
+    role = player.data["RoleData"]
+    role["Lv"] = 4
+    role["GovAchievement"] = 1       # stale level-1 value
+    role["GovAchievementRate"] = 0.1
+    role["GovEventTimes"] = 3
+    handlers._gov_state(player)
+    cfg = next(r for r in v2configs.load("TcLvUpgradeCfg")
+               if int(r.get("Level") or 0) == 4)
+    check("level 4 heals GovAchievement from TcLvUpgradeCfg",
+          role["GovAchievement"] == cfg["GovAchievement"],
+          (role["GovAchievement"], cfg["GovAchievement"]))
+    check("level 4 heals rate and capacity too",
+          role["GovAchievementRate"] == cfg["GovAchievementRate"]
+          and role["GovEventTimes"] == cfg["GovEventTimes"],
+          (role["GovAchievementRate"], role["GovEventTimes"], cfg))
+    before = int(role.get("Exp") or 0)
+    d = handlers.action_government_event({"OptionNum": 2}, player, session, store)
+    check("No button now grants the level-4 EXP amount",
+          int(role["Exp"]) == before + int(cfg["GovAchievement"])
+          and d["RemainList"][0]["Num"] == int(role["Exp"]),
+          (d["RemainList"], role["Exp"], cfg["GovAchievement"]))
+
+
 def main() -> None:
+    test_config_values_track_sultan_level()
     test_login_seeds_government_state()
     test_10702_initial_shape()
     test_10701_advance_and_persistence()

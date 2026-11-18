@@ -598,6 +598,9 @@ def action_level_up(payload: dict, player: Player, session: Session, store: Stor
     rb["Lv"] = level
     # Mirror the client's client-side unlock so it survives the next login.
     _heal_counsellor_unlocks(player)
+    # Government config values (affair EXP/rate/capacity) are level-indexed;
+    # refresh the persisted slice so this level-up takes effect immediately.
+    _gov_state(player)
     store.save(player)
     return {"NewLevel": level, "GovOverTime": 0, "NewBeautyList": {}}
 
@@ -3538,14 +3541,19 @@ def _gov_state(player: Player) -> tuple[dict, dict]:
     # v7 login carries GovEventTime as a "YYYY-MM-DD HH:MM:SS" string.
     if not role_data.get("GovEventTime"):
         role_data["GovEventTime"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(_now()))
-    # Config-backed values from TcLvUpgradeCfg[Level]; the v7 login carries
-    # these too, although the v2 client reads them from config directly.
+    # Config-backed values from TcLvUpgradeCfg[Level].  These MUST track the
+    # current Sultan level: GovAchievement is the EXP granted by the "No"
+    # affair button, GovAchievementRate scales the "Yes" resource reward, and
+    # GovEventTimes is the daily affair capacity.  A plain setdefault froze
+    # them at the level-1 values (1 / 0.1 / 3) forever, so levelling up never
+    # increased the No reward.  Recompute every time so legacy accounts heal
+    # and a level-up takes effect immediately.
     level = int(role_data.get("Lv") or 1)
     for row in v2configs.load("TcLvUpgradeCfg"):
         if isinstance(row, dict) and int(row.get("Level") or 0) == level:
             for key in ("GovEventTimes", "GovAchievement", "GovAchievementRate"):
-                if row.get(key) is not None:
-                    role_data.setdefault(key, row[key])
+                if row.get(key) is not None and role_data.get(key) != row[key]:
+                    role_data[key] = row[key]
             break
     gov = player.data.setdefault("GovAffairs", {})
     gov.setdefault("Completed", 0)
