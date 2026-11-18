@@ -2447,13 +2447,10 @@ def action_11901(payload: dict, player: Player, session: Session, store: Store) 
                 "ActivityType": i,
                 "StartTime": _TIME_LIMIT_SCHEDULE[0],
                 "EndTime": _TIME_LIMIT_SCHEDULE[1],
-                # Original award rows where the v7 capture quotes them
-                # (activity 9); neutral {} elsewhere -- see the
-                # _TIME_LIMIT_AWARD_CFG provenance below.
-                "AwardCfg": {
-                    str(stage): row
-                    for stage, row in enumerate(_time_limit_rows(i), 1)
-                },
+                # AwardCfg MUST be a LIST: the client's sortData walks
+                # `for i = 1, #AwardCfg` (modules/_limitTimeMod.lua 687-690);
+                # a string-keyed map has # == 0 in Lua, so no row ever draws.
+                "AwardCfg": _time_limit_rows(i),
             }
             for i in dict.fromkeys(tl_ids)
         }
@@ -2497,6 +2494,16 @@ _TIME_LIMIT_EXPIRATION = 86400  # ConfigEnvSet "TimeLimitExpirationSeconds"
 # JUDGMENT CALLS (not in the capture): RequireNum 0 makes these original
 # rewards claimable; IsShow 1 keeps the rows visible.
 _TIME_LIMIT_AWARD_CFG: dict[int, list[dict]] = {
+    1: [
+        # Activity 1 stage 1, quoted from the official 11904 response
+        # (v7_actions.jsonl 12:40:10Z).  The captured row also carried four
+        # ActivityId-5 items absent from the v2 TcItem; omitted.
+        {"IsShow": 1, "RequireNum": 0,
+         "Award": [{"ItemId": 509, "Num": 1},
+                   {"ItemId": 210, "Num": 1},
+                   {"ItemId": 505, "Num": 1},
+                   {"ItemId": 507, "Num": 1}]},
+    ],
     9: [
         {"IsShow": 1, "RequireNum": 0,
          "Award": [{"ItemId": 2, "Num": 50000},
@@ -2508,6 +2515,35 @@ _TIME_LIMIT_AWARD_CFG: dict[int, list[dict]] = {
 
 
 def _time_limit_rows(activity_id: int) -> list[dict]:
+    """AwardCfg rows as a LIST with explicit stage index (sortData defaults
+    a missing index to the array position, but drawViewG titles by row.index)."""
+    return [
+        {**row, "index": stage,
+         "Award": [dict(item) for item in row.get("Award") or []]}
+        for stage, row in enumerate(_TIME_LIMIT_AWARD_CFG.get(int(activity_id), []), 1)
+    ]
+
+
+def _leading_claimed_stages(flags: list[int]) -> int:
+    prefix = 0
+    for flag in flags:
+        if flag != 1:
+            break
+        prefix += 1
+    return prefix
+
+
+def _time_limit_served_flags(award_get: dict, activity_id: int) -> list[int]:
+    """11902 wire flags: dense [1]*k for the leading claimed stages.
+
+    The v2 client's sortData (modules/_limitTimeMod.lua 698-726) renders a
+    row unclaimed only when its flag is nil, and claimed only when it is 1;
+    any other truthy value (the official v7 0) makes the row vanish.  JSON
+    cannot punch holes in an array, so claims are sequential (see 11904).
+    """
+    raw = award_get.get(str(activity_id))
+    flags = [int(f) for f in raw] if isinstance(raw, list) else []
+    return [1] * _leading_claimed_stages(flags)
     return [
         {**row, "Award": [dict(item) for item in row.get("Award") or []]}
         for row in _TIME_LIMIT_AWARD_CFG.get(int(activity_id), [])
@@ -2570,8 +2606,7 @@ def action_11902(payload: dict, player: Player, session: Session, store: Store) 
     served: dict[str, list[int]] = {}
     progress: dict[str, int] = {}
     for activity_id in _time_limit_ids(player):
-        rows = _time_limit_rows(activity_id)
-        served[str(activity_id)] = _time_limit_flags(award_get, activity_id, len(rows))
+        served[str(activity_id)] = _time_limit_served_flags(award_get, activity_id)
         progress[str(activity_id)] = _as_int(complete.get(str(activity_id)))
     return {"TimeLimitAwardGet": served, "TimeLimitComplete": progress}
 
@@ -2624,6 +2659,11 @@ def action_11904(payload: dict, player: Player, session: Session, store: Store) 
     flags = _time_limit_flags(award_get, activity_id, len(rows))
     if flags[stage - 1]:
         return {"_fail": "Already claimed"}
+    # Sequential claims keep the served flag prefix dense (JSON cannot encode
+    # holes); an out-of-order tap gets an Info toast instead of a grant that
+    # 11902's wire form cannot represent.
+    if stage != _leading_claimed_stages(flags) + 1:
+        return {"_fail": "Claim the previous reward first"}
     if _as_int(complete.get(str(activity_id))) < _as_int(row.get("RequireNum")):
         return {"_fail": "Not enough progress"}
     bag_ids: list[int] = []
@@ -2815,6 +2855,58 @@ def _rank_row(uid: str, data: dict) -> dict:
     }
 
 
+def _player_four_attributes(data: dict) -> list[int]:
+    """The four profile attributes, summed from unlocked counsellors and
+    children (client roleMod.lua 288-355 / _ministerMod.lua 1586-1609).
+    Dev accounts persist AttributeValue [0,0,0,0] and no children, so the
+    honest aggregate is [0,0,0,0]; nothing fabricated."""
+    attrs = [0, 0, 0, 0]
+
+    def add(entry: object) -> None:
+        if not isinstance(entry, dict):
+            return
+        for index, key in enumerate(("Force", "Intelligence", "Politics", "Charm")):
+            if isinstance(entry.get(key), (int, float)):
+                attrs[index] += int(entry[key])
+
+    for c in (data.get("RoleCounsellor") or []):
+        if isinstance(c, dict) and int(c.get("IsLock") or 0) == 0:
+            values = c.get("AttributeValue")
+            if isinstance(values, list):
+                for index in range(4):
+                    attrs[index] += _as_int(values[index]) if index < len(values) else 0
+    for child in (data.get("Children") or []):
+        add(child)
+    for o_child in (data.get("OChildren") or []):
+        if isinstance(o_child, dict):
+            add(o_child.get("oChild"))
+    return attrs
+
+
+def _rank_profile_row(uid: str, data: dict) -> dict:
+    """Full row for gameUi.showRoleInformation (ui/gameUi.lua 9130-10341):
+    every field the dialog reads unguarded must be present with the right
+    type, or the profile draws empty.  Neutral values mirror the client's
+    own customer-service profile mock (modules/_diplomacyMod.lua 461-490).
+    """
+    row = _rank_row(uid, data)
+    base = data.get("RoleBase") if isinstance(data.get("RoleBase"), dict) else {}
+    section = data.get("RoleSection") if isinstance(data.get("RoleSection"), dict) else {}
+    attrs = _player_four_attributes(data)
+    intimacy = _total_intimacy(data)
+    row.update({
+        "ShowId": _as_int(base.get("ShowId")),
+        "DressList": list(row["Dress"]),       # dialog reads DressList, not Dress
+        "Section": _rank_section_record(section),
+        "AllianceId": 0, "AllianceName": "",
+        "Intimacy": intimacy if intimacy is not None else 0,
+        "Force": attrs[0], "Intelligence": attrs[1],
+        "Politics": attrs[2], "Charm": attrs[3],
+        "TitleList": [], "IsBlack": 0, "IsFriend": 0,
+    })
+    return row
+
+
 def _rank_of(rows: list[dict], self_id: str) -> int:
     for index, row in enumerate(rows, 1):
         if str(row["RoleId"]) == self_id:
@@ -2914,12 +3006,7 @@ def action_rank_player_detail(payload: dict, player: Player, session: Session, s
     data = _ranking_players(store, player).get(query_id)
     if data is None:
         return {}
-    row = _rank_row(query_id, data)
-    base = data.get("RoleBase") if isinstance(data.get("RoleBase"), dict) else {}
-    show_id = _as_int(base.get("ShowId"))
-    if show_id:
-        row["ShowId"] = show_id
-    return row
+    return _rank_profile_row(query_id, data)
 
 
 def action_rank_cross_list(payload: dict, player: Player, session: Session, store: Store) -> dict:
@@ -2965,12 +3052,22 @@ def action_rank_top1(payload: dict, player: Player, session: Session, store: Sto
     return {"IsCrossRankOpen": open_cross, "Top1": best, "CrossTop1": dict(best)}
 
 
-def action_rank_alliance_detail(payload: dict, player: Player, session: Session, store: Store) -> dict:
-    """_rankingMod.action11006 (modules/_rankingMod.lua 610-628) forwards the
-    response unchanged to its caller.  Dev accounts have AllianceGuid "" and
-    no alliance record, so the neutral shape is an empty table (Lua treats 0
-    as truthy, so a scalar here would break callers that pairs() over it)."""
-    return {}
+def action_rank_cross_player_detail(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_rankingMod.action11006 (modules/_rankingMod.lua 610-628) is the
+    cross-server PLAYER detail: showRoleInformation's other-server branch
+    (ui/gameUi.lua 10426-10451) sends {RoleId, QueryServerId} and feeds the
+    response straight into the profile dialog.  Chat MsgData.ServerId is a
+    string ('1') while the login route id is numeric, so Lua '1' ~= 1 makes
+    every chat profile click land here.  The old alliance stub returned {}
+    and the dialog drew empty.  Single dev server: resolve locally.
+    """
+    role_id = str(payload.get("RoleId") or "")
+    if not role_id:
+        return {}
+    data = _ranking_players(store, player).get(role_id)
+    if data is None:
+        return {}
+    return _rank_profile_row(role_id, data)
 
 
 def action_rank_alliance_rank_detail(payload: dict, player: Player, session: Session, store: Store) -> dict:
@@ -3306,10 +3403,68 @@ def action_school_study(payload: dict, player: Player, session: Session, store: 
     return {"StudyArray": study}
 
 
+def _school_dispatch_pending(player: Player) -> list[dict]:
+    """Seat the pending StudyArray lineup into free study slots.
+
+    The "Dispatch All" button (BtnOneKey, schoolScene.lua 1931-2059) sends
+    ONLY action10907 with an empty request; the lineup is the StudyArray
+    persisted by 10906.  The client callback (_schoolMod.lua 574-610) appends
+    each response entry without dedup, so DataList must contain ONLY the
+    counsellors seated by this call; 10905 remains the full-list refresh.
+    """
+    slots = _school_slots(player)
+    capacity = _school_capacity(player)
+    occupied = {int(v.get("Position") or 0) for v in slots.values()
+                if isinstance(v, dict)}
+    seated = {int(v.get("MinisterId") or 0) for v in slots.values()
+              if isinstance(v, dict) and v.get("MinisterId")}
+    known = {int(c.get("CounsellorId") or 0)
+             for c in (player.data.get("RoleCounsellor") or [])
+             if isinstance(c, dict)}
+    role_data = player.data.get("RoleData") if isinstance(player.data.get("RoleData"), dict) else {}
+    study = role_data.get("StudyArray")
+    if not isinstance(study, list):
+        study = []
+    now = _now()
+    fresh: list[dict] = []
+    seen: set[int] = set()
+    for value in study:
+        try:
+            cid = int(value)
+        except (TypeError, ValueError):
+            continue
+        if not cid or cid in seen:
+            continue
+        seen.add(cid)
+        if cid in seated or cid not in known:
+            continue
+        position = next((p for p in range(1, capacity + 1) if p not in occupied), None)
+        if position is None:
+            break
+        occupied.add(position)
+        slot = {"Position": position, "MinisterId": cid, "StudyTime": now}
+        slots[str(position)] = slot
+        fresh.append(slot)
+    fresh.sort(key=lambda s: int(s.get("Position") or 0))
+    return fresh
+
+
 def action_school_study_list(payload: dict, player: Player, session: Session, store: Store) -> dict:
-    """_schoolMod action10907: the callback pairs() over A0_3.DataList and
-    copies CounsellorId/StudyPosition into the school module state."""
-    return {"DataList": _school_data_list(player), "Capacity": _school_capacity(player)}
+    """_schoolMod action10907 (empty request): the "Dispatch All" button.
+
+    The callback pairs() over A0_3.DataList and appends each entry's
+    CounsellorId/StudyPosition locally; seating the persisted 10906 lineup
+    here is what makes the button work (the client sends no assignments).
+    """
+    fresh = _school_dispatch_pending(player)
+    if fresh:
+        store.save(player)
+    data_list = [{
+        "CounsellorId": int(s.get("MinisterId") or 0),
+        "StudyPosition": int(s.get("Position") or 0),
+        "STUnix": int(s.get("StudyTime") or 0),
+    } for s in fresh]
+    return {"DataList": data_list, "Capacity": _school_capacity(player)}
 
 
 # --------------------------------------------------------------------------
@@ -4834,7 +4989,7 @@ HANDLERS = {
     "11003": action_rank_player_detail,
     "11004": action_rank_cross_list,
     "11005": action_rank_top1,
-    "11006": action_rank_alliance_detail,
+    "11006": action_rank_cross_player_detail,
     "11007": action_rank_alliance_rank_detail,
     "10701": action_government_event,
     "10702": action_government_info,

@@ -191,10 +191,18 @@ def test_rank_other_actions_safe_shapes() -> None:
     check("11004 cross lists are tables, never 0",
           all(isinstance(cross.get(k), list)
               for k in ("CrossPower", "CrossAlliancePower", "CrossIntimacy")), cross)
-    check("11006/11007 return tables", isinstance(
-        handlers.action_rank_alliance_detail({}, requester, session, store), dict)
-        and isinstance(handlers.action_rank_alliance_rank_detail(
-            {}, requester, session, store), dict))
+    detail = handlers.action_rank_cross_player_detail(
+        {"RoleId": "rank_rival", "QueryServerId": "1"}, requester, session, store)
+    check("11006 cross player detail has the showRoleInformation fields",
+          isinstance(detail, dict) and detail.get("RoleId") == "rank_rival"
+          and {"Section", "Force", "Intelligence", "Politics", "Charm",
+               "TitleList", "DressList", "AllianceId", "AllianceName",
+               "Intimacy", "IsBlack", "IsFriend"} <= set(detail), detail)
+    check("11006 unknown RoleId returns an empty table",
+          handlers.action_rank_cross_player_detail(
+              {"RoleId": "nobody"}, requester, session, store) == {})
+    check("11007 returns a table", isinstance(
+        handlers.action_rank_alliance_rank_detail({}, requester, session, store), dict))
 
 
 def test_v2_red_point_keys_are_numeric() -> None:
