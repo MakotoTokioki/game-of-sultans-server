@@ -1365,6 +1365,19 @@ def action_items(payload: dict, player: Player, session: Session, store: Store) 
     return action_full_state(payload, player, session, store)
 
 
+def action_item_jump(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_itemMod.action10307: the callback replaces its jump table with
+    response["JumpConfMap"] verbatim (_itemMod.lua 2032-2041).  A missing key
+    sets it to nil, and showShortItemDialog -> getItemJumpAndNoJumo then
+    indexes that nil table (_itemMod.lua 1291-1292) with the exact error
+    "attempt to index upvalue '?' (a nil value)" seen on the device when the
+    Masquerade transfer/recovery dialogs request item 563.  An empty table is
+    the neutral original-shaped value: every PossibleJump of TcItemOutputJump
+    falls back to the closure's default tab index.  No unlock state invented.
+    """
+    return {"JumpConfMap": {}, "SysTime": _now()}
+
+
 def _roll(percent: int) -> bool:
     """Success roll against a config probability (TcStar.Probability)."""
     try:
@@ -1696,6 +1709,54 @@ def _game_time(ts: int | None = None) -> datetime.datetime:
 
 def _game_date_string(ts: int | None = None) -> str:
     return _game_time(ts).strftime(_GAME_DATE_FMT)
+
+
+# --- Masquerade / Find (10601-10606) response conversions -------------------
+# Stored VisitData keeps epochs, but the client's timer code does NOT:
+#   _findMod.startFateTime (600-605) -> tools.common.dateToSec (460-541) parses
+#     only "YYYY-MM-DD HH:MM:SS" then calls os.time; an epoch int makes all
+#     captures nil and raises "field 'day' missing in date table" (device log
+#     2026-11-18 09:21:40, blocks Find scene entry).
+#   _findMod.startVitalityTime (485-514) does raw arithmetic with VitalityTime,
+#     so it must be seconds elapsed in the current VitalityCD tick, not an epoch.
+def _visit_fate_time(value) -> str:
+    if isinstance(value, str) and len(value) >= 19:
+        try:
+            datetime.datetime.strptime(value[:19], _GAME_DATE_FMT)
+            return value
+        except ValueError:
+            pass
+    try:
+        ts = int(value)
+    except (TypeError, ValueError):
+        ts = _now()
+    return _game_date_string(ts)
+
+
+def _visit_vitality_time(value) -> int:
+    try:
+        elapsed = _now() - int(value)
+    except (TypeError, ValueError):
+        elapsed = 0
+    if elapsed < 0:
+        elapsed = 0
+    try:
+        cd = int(v2configs.env_value("VitalityCD") or 1800)
+    except (TypeError, ValueError):
+        cd = 1800
+    return elapsed % max(1, cd)
+
+
+def _visit_client_slice(visit: dict) -> dict:
+    """VisitData slice in the exact shape _findMod.action10602 reads."""
+    return {
+        "Vitality": _as_int(visit.get("Vitality") or 0),
+        "Fate": _as_int(visit.get("Fate") or 0),
+        "FateTime": _visit_fate_time(visit.get("FateTime")),
+        "VitalityTime": _visit_vitality_time(visit.get("VitalityTime")),
+        "TransferNum": _as_int(visit.get("TransferNum") or 0),
+        "PraiseGuide": _as_int(visit.get("PraiseGuide") or 0),
+    }
 
 
 def _game_day_number(value) -> int:
@@ -3768,14 +3829,7 @@ def action_visit_info(payload: dict, player: Player, session: Session, store: St
     """_findMod.action10602: seed/extend the persisted VisitData slice."""
     visit = _visit_data(player)
     store.save(player)
-    return {"VisitData": {
-        "Vitality": _as_int(visit.get("Vitality") or 0),
-        "Fate": _as_int(visit.get("Fate") or 0),
-        "FateTime": _as_int(visit.get("FateTime") or 0),
-        "VitalityTime": _as_int(visit.get("VitalityTime") or 0),
-        "TransferNum": _as_int(visit.get("TransferNum") or 0),
-        "PraiseGuide": _as_int(visit.get("PraiseGuide") or 0),
-    }}
+    return {"VisitData": _visit_client_slice(visit), "SysTime": _now()}
 
 
 def action_visit_state(payload: dict, player: Player, session: Session, store: Store) -> dict:
@@ -3788,12 +3842,13 @@ def action_visit_state(payload: dict, player: Player, session: Session, store: S
     """
     visit = _visit_data(player)
     store.save(player)
+    out = _visit_client_slice(visit)
     return {
-        "VitalityTime": _as_int(visit.get("VitalityTime") or 0),
-        "FateTime": _as_int(visit.get("FateTime") or 0),
-        "Fate": _as_int(visit.get("Fate") or 0),
-        "Vitality": _as_int(visit.get("Vitality") or 0),
-        "PraiseGuide": _as_int(visit.get("PraiseGuide") or 0),
+        "VitalityTime": out["VitalityTime"],
+        "FateTime": out["FateTime"],
+        "Fate": out["Fate"],
+        "Vitality": out["Vitality"],
+        "PraiseGuide": out["PraiseGuide"],
         "EventType": 0,
         "RemainList": [],
         "SysTime": _now(),
@@ -3807,8 +3862,8 @@ def action_visit_recover(payload: dict, player: Player, session: Session, store:
     visit["Vitality"] = max_vitality
     visit["VitalityTime"] = _now()
     store.save(player)
-    return {"RecoverVitality": max_vitality, "VisitData": dict(visit),
-            "SysTime": _now()}
+    return {"RecoverVitality": max_vitality,
+            "VisitData": _visit_client_slice(visit), "SysTime": _now()}
 
 
 def action_visit_sync(payload: dict, player: Player, session: Session, store: Store) -> dict:
@@ -3818,10 +3873,10 @@ def action_visit_sync(payload: dict, player: Player, session: Session, store: St
     visit["VitalityTime"] = now
     visit["FateTime"] = now
     store.save(player)
-    return {"Fate": _as_int(visit.get("Fate") or 0),
-            "Vitality": _as_int(visit.get("Vitality") or 0),
-            "VitalityTime": now, "FateTime": now,
-            "VisitData": dict(visit), "SysTime": now}
+    out = _visit_client_slice(visit)
+    return {"Fate": out["Fate"], "Vitality": out["Vitality"],
+            "VitalityTime": out["VitalityTime"], "FateTime": out["FateTime"],
+            "VisitData": out, "SysTime": now}
 
 
 def action_visit_transfer(payload: dict, player: Player, session: Session, store: Store) -> dict:
@@ -3838,7 +3893,7 @@ def action_visit_transfer(payload: dict, player: Player, session: Session, store
     visit["TransferNum"] = used
     store.save(player)
     return {"Fate": _as_int(visit.get("Fate") or 0), "TransferNum": used,
-            "VisitData": dict(visit), "SysTime": _now()}
+            "VisitData": _visit_client_slice(visit), "SysTime": _now()}
 
 
 def action_visit_status(payload: dict, player: Player, session: Session, store: Store) -> dict:
@@ -3847,7 +3902,8 @@ def action_visit_status(payload: dict, player: Player, session: Session, store: 
     status = payload.get("Status")
     visit["Status"] = status
     store.save(player)
-    return {"Status": status, "VisitData": dict(visit), "SysTime": _now()}
+    return {"Status": status, "VisitData": _visit_client_slice(visit),
+            "SysTime": _now()}
 
 
 # --------------------------------------------------------------------------
@@ -4022,7 +4078,7 @@ HANDLERS = {
     "10304": action_items,
     "10305": action_items,
     "10306": action_items,
-    "10307": action_items,
+    "10307": action_item_jump,
     "10308": action_items,
     "10309": action_items,
     "10391": action_items,
