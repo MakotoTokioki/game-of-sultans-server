@@ -55,11 +55,19 @@ def _player(data: dict | None = None) -> Player:
 
 
 def _devtest_data() -> dict:
-    """Player data with the devtest vizier levels that produced the
-    on-device stats 215/105/72/103 (the file is read-only for this test)."""
-    path = Path(__file__).with_name("data") / "players" / "devtest.json"
-    with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+    """Player data with the on-device vizier levels that produced the stats
+    215/105/72/103.  Synthesized from defaults so the test no longer depends
+    on a live account file (which may be deleted/reset between sessions)."""
+    data = default_player("devtest")
+    for counsellor, level in zip(data["RoleCounsellor"], (36, 48, 14)):
+        counsellor["Lv"] = level
+    level = int(data["RoleData"].get("Lv") or 1)
+    cfg = next((r for r in v2configs.load("TcLvUpgradeCfg")
+                if int(r.get("Level") or 0) == level), {})
+    for key in ("GovAchievement", "GovAchievementRate", "GovEventTimes"):
+        if cfg.get(key) is not None:
+            data["RoleData"][key] = cfg[key]
+    return data
 
 
 def _ready(event_id: int, data: dict | None = None) -> Player:
@@ -69,6 +77,14 @@ def _ready(event_id: int, data: dict | None = None) -> Player:
     # exactly one cooldown tick, matching the v7 capture sequence.
     data["RoleData"]["GovTimeUTC"] = int(time.time()) - 3 * int(v2configs.env_value("GovEventCd"))
     data.setdefault("GovAffairs", {})["Completed"] = 0
+    # The level-indexed government values were previously read from the live
+    # account file; seed them from the original TcLvUpgradeCfg row instead.
+    level = int(data["RoleData"].get("Lv") or 1)
+    cfg = next((r for r in v2configs.load("TcLvUpgradeCfg")
+                if int(r.get("Level") or 0) == level), {})
+    for key in ("GovAchievement", "GovAchievementRate", "GovEventTimes"):
+        if cfg.get(key) is not None:
+            data["RoleData"][key] = cfg[key]
     return _player(data)
 
 

@@ -627,6 +627,7 @@ def action_task(payload: dict, player: Player, session: Session, store: Store) -
     if not completed:
         return response
     bag_ids: list[int] = []
+    resource_ids: list[int] = []
     role_data = player.data.setdefault("RoleData", {})
     for item_id, num in v2configs.maintask_award_items(claimed_id):
         key = _REMAIN_LIST_MAP.get(item_id)
@@ -634,11 +635,15 @@ def action_task(payload: dict, player: Player, session: Session, store: Store) -
             # ItemIds 1-6 are the top resource bar.  RemainList carries the
             # new absolute value, which attach_remain_list builds from RoleData.
             role_data[key] = int(role_data.get(key) or 0) + int(num)
+            resource_ids.append(int(item_id))
         elif item_id >= 100:
             _role_item_add(player, item_id, num)
             bag_ids.append(item_id)
     store.save(player)
-    return attach_remain_list(response, player, items=bag_ids)
+    # Only the resources actually granted: the client renders one popup row
+    # per RemainList entry, so untouched resources must not appear as +0.
+    return attach_remain_list(response, player, items=bag_ids,
+                              resources=resource_ids)
 
 
 # Canonical client red-point map.  Every official v7 action response carries
@@ -794,7 +799,8 @@ _REMAIN_LIST_MAP = {
 
 
 def attach_remain_list(data: dict, player: Player, items: list | None = None,
-                       first_item_id: int | None = None) -> dict:
+                       first_item_id: int | None = None,
+                       resources: list[int] | None = None) -> dict:
     """Add the absolute post-action resource snapshot to an action response.
 
     Every entry is {"ItemId": id, "Num": absolute value}; the client
@@ -808,9 +814,17 @@ def attach_remain_list(data: dict, player: Player, items: list | None = None,
     so the granted item must be first (scene ~1860-1915).  Existing response
     keys are preserved; data is returned.
     """
+    # The client builds the floating reward popup from EVERY RemainList row,
+    # so sending a full resource snapshot displays bogus "+0" entries for
+    # resources this action did not grant.  Callers that know what changed
+    # pass `resources` (item ids 1-6); the default keeps the old behavior for
+    # handlers whose grants are not tracked.
+    only_ids = set(int(i) for i in resources) if resources is not None else None
     role_data = player.data.get("RoleData") or {}
     remain = []
     for item_id in sorted(_REMAIN_LIST_MAP):
+        if only_ids is not None and item_id not in only_ids:
+            continue
         key = _REMAIN_LIST_MAP[item_id]
         if key not in role_data:
             continue
@@ -2487,11 +2501,12 @@ def action_achieve_claim(payload: dict, player: Player, session: Session, store:
     if current < need:
         return {"_fail": f"achievement progress {current}/{need}"}
 
-    _, bag_ids = _grant_award_pairs(player, row.get("AwardItem"))
+    pairs, bag_ids = _grant_award_pairs(player, row.get("AwardItem"))
     stages[str(aid)] = target
     store.save(player)
     return attach_remain_list(
-        {"AchievementId": aid, "GetAwardStage": target}, player, items=bag_ids)
+        {"AchievementId": aid, "GetAwardStage": target}, player, items=bag_ids,
+        resources=[int(p[0]) for p in pairs if int(p[0]) in _REMAIN_LIST_MAP])
 
 
 def action_daily_task(payload: dict, player: Player, session: Session, store: Store) -> dict:
@@ -2573,11 +2588,12 @@ def action_activity_award_claim(payload: dict, player: Player, session: Session,
     if need <= 0 or activity < need:
         return {"_fail": f"activity points {activity}/{need}"}
 
-    _, bag_ids = _grant_award_pairs(player, row.get("AwardItem"))
+    pairs, bag_ids = _grant_award_pairs(player, row.get("AwardItem"))
     state["activity_flags"][str(aid)] = 1
     store.save(player)
     return attach_remain_list(
-        {"ActivityAwardId": aid, "RoleActivity": activity}, player, items=bag_ids)
+        {"ActivityAwardId": aid, "RoleActivity": activity}, player, items=bag_ids,
+        resources=[int(p[0]) for p in pairs if int(p[0]) in _REMAIN_LIST_MAP])
 
 
 # --------------------------------------------------------------------------

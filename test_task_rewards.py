@@ -72,8 +72,8 @@ def test_task_one_claim_grants_configured_silver() -> None:
     check("claim grants the configured +100000 Silver",
           player.data["RoleData"]["Silver"] == before + 100000
           and rem.get(2) == before + 100000, (before, rem))
-    check("RemainList carries the absolute resource totals",
-          set(rem) >= {1, 2, 3, 4, 5}, rem)
+    check("RemainList contains only the granted resource (no +0 rows)",
+          set(rem) == {2}, rem)
     check("claim persists the reward", store.saved == 1, store.saved)
 
 
