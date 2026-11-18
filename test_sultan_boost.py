@@ -101,6 +101,44 @@ def main():
           and d["MiracleTrigger"] is True,
           (before, p5.data["RoleData"]["Silver"], normal_gain, d.get("MiracleTrigger")))
 
+    # Vizier upgrade: single-level boost gives +3 levels total, free.
+    def vizier(uid, roll):
+        p = Player(uid=uid, data=default_player(uid, "Sultan"),
+                   path=Path(tempfile.mkdtemp()) / f"{uid}.json")
+        handlers._miracle_roll = lambda: roll
+        before = int(p.data["RoleCounsellor"][0]["Lv"])
+        before_silver = int(p.data["RoleData"]["Silver"])
+        d = handlers.action_counsellor_upgrade(
+            {"CounsellorId": 1, "IsUpTen": False}, p, None,
+            SimpleNamespace(save=lambda p: None))
+        return p, d, before, before_silver
+
+    pn, dn, ln, sn = vizier("viz_normal", False)
+    check("normal vizier upgrade gives +1 level",
+          int(pn.data["RoleCounsellor"][0]["Lv"]) == ln + 1
+          and dn["MiracleTrigger"] is False, dn)
+    spent_normal = sn - int(pn.data["RoleData"]["Silver"])
+
+    pb, db, lb, sb = vizier("viz_boost", True)
+    check("boosted vizier upgrade gives +3 levels",
+          int(pb.data["RoleCounsellor"][0]["Lv"]) == lb + 3
+          and db["MiracleTrigger"] is True, db)
+    spent_boost = sb - int(pb.data["RoleData"]["Silver"])
+    check("bonus levels are free (same silver as normal upgrade)",
+          spent_boost == spent_normal, (spent_normal, spent_boost))
+
+    p10 = Player(uid="viz_ten", data=default_player("viz_ten", "Sultan"),
+                 path=Path(tempfile.mkdtemp()) / "viz_ten.json")
+    handlers._miracle_roll = lambda: True
+    before10 = int(p10.data["RoleCounsellor"][0]["Lv"])
+    d10 = handlers.action_counsellor_upgrade(
+        {"CounsellorId": 1, "IsUpTen": True}, p10, None,
+        SimpleNamespace(save=lambda p: None))
+    check("10x button never boosts",
+          d10["MiracleTrigger"] is False
+          and int(p10.data["RoleCounsellor"][0]["Lv"]) == before10 + 10,
+          d10)
+
     handlers._miracle_roll = original
     print(f"\n{sum(ok)}/{len(ok)} checks passed")
     sys.exit(0 if all(ok) else 1)

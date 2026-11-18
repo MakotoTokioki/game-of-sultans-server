@@ -88,7 +88,11 @@ def main() -> None:
     new_silver = d.get("CounsellorSilver")
     check("10101 shape", isinstance(new_lv, int) and isinstance(new_silver, int)
           and "MiracleTrigger" in d, d)
-    check("10101 leveled", new_lv == before_lv + 1, (before_lv, new_lv))
+    # Sultan Boost (15%) can add +2 free bonus levels, so Lv rises 1..3.
+    check("10101 leveled (1..3 with Sultan Boost)",
+          before_lv < new_lv <= before_lv + 3, (before_lv, new_lv))
+    check("10101 MiracleTrigger is a real boolean",
+          isinstance(d.get("MiracleTrigger"), bool), d.get("MiracleTrigger"))
 
     # 10101 x10
     d = forward(10101, {"CounsellorId": 1, "IsUpTen": True})

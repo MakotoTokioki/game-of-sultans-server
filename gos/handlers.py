@@ -3989,6 +3989,12 @@ def action_counsellor_upgrade(payload: dict, player: Player, session: Session, s
     role_data = player.data.setdefault("RoleData", {})
     silver = int(role_data.get("Silver") or 0)
 
+    # Sultan Boost on single-level upgrades only (community: the 10x button
+    # never triggers it): +2 free bonus levels on top of the normal one, so
+    # "Vizier level up 3x" (client text) means Lv +3 total.  Bonus levels cost
+    # no silver and are capped at the original config's max level.
+    miracle = (not up_ten) and _miracle_roll()
+    bonus_left = 2 if miracle else 0
     steps = 10 if up_ten else 1
     for _ in range(steps):
         need = _level_silver(level + 1)
@@ -4003,6 +4009,10 @@ def action_counsellor_upgrade(payload: dict, player: Player, session: Session, s
         if invested >= need:
             invested -= need
             level += 1
+            # Free bonus levels from the boost (no extra silver spent).
+            while bonus_left > 0 and _level_silver(level + 1) is not None:
+                level += 1
+                bonus_left -= 1
 
     counsellor["Lv"] = level
     counsellor["NowSilver"] = invested
@@ -4011,7 +4021,8 @@ def action_counsellor_upgrade(payload: dict, player: Player, session: Session, s
     # The 10101 callback only updates Lv/NowSilver for the counsellor; the
     # spent silver must reach the top bar through RemainList (ItemId 2).
     return attach_remain_list(
-        {"CounsellorLv": level, "CounsellorSilver": invested, "MiracleTrigger": 0},
+        {"CounsellorLv": level, "CounsellorSilver": invested,
+         "MiracleTrigger": miracle},
         player,
     )
 
