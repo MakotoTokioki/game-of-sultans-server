@@ -2444,7 +2444,9 @@ def _rank_of(rows: list[dict], self_id: str) -> int:
     for index, row in enumerate(rows, 1):
         if str(row["RoleId"]) == self_id:
             return index
-    return 9999  # rankingScene 55-56 renders 9999 / 0 as "9999+"
+    # The client shows "9999+" only for 0 or >9999 (rankingScene 55-56), so 0
+    # is its unranked sentinel; 9999 would render as a literal "9999".
+    return 0
 
 
 def action_rank_info(payload: dict, player: Player, session: Session, store: Store) -> dict:
@@ -2474,10 +2476,16 @@ def action_rank_info(payload: dict, player: Player, session: Session, store: Sto
     self_id = str(base.get("Rid") or player.uid)
     worship_time = _rank_worship_time(player)
     return {
+        # rankingScene.rankingScene.lua reads RankSelf through the
+        # {"TotalPower","Section","Intimacy"} key array (lines 36-54).  The
+        # PowerRank/SectionRank/IntimacyRank names belong to RankWorshipTime
+        # (client lines 43-49 + 209-216), NOT to RankSelf.  Using the latter
+        # here made RankSelf["TotalPower"] nil and `9999 < nil` aborted
+        # showOverlay with "attempt to compare number with nil".
         "RankSelf": {
-            "PowerRank": _rank_of(power_rows, self_id),
-            "SectionRank": _rank_of(section_rows, self_id),
-            "IntimacyRank": _rank_of(intimacy_rows, self_id),
+            "TotalPower": _rank_of(power_rows, self_id),
+            "Section": _rank_of(section_rows, self_id),
+            "Intimacy": _rank_of(intimacy_rows, self_id),
         },
         "RolePower": power_rows,
         "RoleSection": section_rows,

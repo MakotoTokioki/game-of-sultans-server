@@ -77,12 +77,12 @@ def test_rank_info_lists_and_self() -> None:
           d["BeautyIntimacy"])
 
     self_rank = d["RankSelf"]
-    check("11001 RankSelf is a dict with the three scene keys",
+    check("11001 RankSelf uses the keys rankingScene actually indexes",
           isinstance(self_rank, dict)
-          and set(self_rank) == {"PowerRank", "SectionRank", "IntimacyRank"}, self_rank)
-    check("11001 RankSelf ranks are real positions",
-          self_rank["PowerRank"] == 2 and self_rank["SectionRank"] == 2
-          and self_rank["IntimacyRank"] == 9999, self_rank)
+          and set(self_rank) == {"TotalPower", "Section", "Intimacy"}, self_rank)
+    check("11001 RankSelf ranks are real positions / unranked sentinel 0",
+          self_rank["TotalPower"] == 2 and self_rank["Section"] == 2
+          and self_rank["Intimacy"] == 0, self_rank)
     check("11001 RankWorshipTime is a keyed dict of date strings",
           isinstance(d["RankWorshipTime"], dict)
           and all(isinstance(v, str) and "-" in v
