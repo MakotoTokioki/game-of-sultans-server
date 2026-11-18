@@ -172,6 +172,17 @@ def test_time_limit_activity_icon() -> None:
           and bool(re.match(pattern, str(first.get("EndTime", "")))),
           first)
     check("TimeLimitCfg carries no invented awards", first.get("AwardCfg") == {}, first)
+    d9 = handlers.action_11901({"TimeLimitActivity": [9]}, None, None, None)
+    cfg9 = d9["TimeLimitCfg"]["9"]
+    check("id 9 AwardCfg has the five original captured rows",
+          list(cfg9["AwardCfg"]) == ["1", "2", "3", "4", "5"]
+          and all(r["Award"] == [{"ItemId": 2, "Num": 50000},
+                                 {"ItemId": 201, "Num": 1},
+                                 {"ItemId": 203, "Num": 1}]
+                  for r in cfg9["AwardCfg"].values()), cfg9)
+    check("ids without original data keep empty AwardCfg",
+          all(handlers.action_11901({"TimeLimitActivity": [i]}, None, None, None)
+              ["TimeLimitCfg"][str(i)]["AwardCfg"] == {} for i in range(1, 9)))
     check("11901 carries neutral progress tables",
           d.get("TimeLimitComplete") == {} and d.get("TimeLimitAwardGet") == {},
           d)

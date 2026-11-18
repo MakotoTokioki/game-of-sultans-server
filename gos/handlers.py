@@ -2447,7 +2447,13 @@ def action_11901(payload: dict, player: Player, session: Session, store: Store) 
                 "ActivityType": i,
                 "StartTime": _TIME_LIMIT_SCHEDULE[0],
                 "EndTime": _TIME_LIMIT_SCHEDULE[1],
-                "AwardCfg": {},
+                # Original award rows where the v7 capture quotes them
+                # (activity 9); neutral {} elsewhere -- see the
+                # _TIME_LIMIT_AWARD_CFG provenance below.
+                "AwardCfg": {
+                    str(stage): row
+                    for stage, row in enumerate(_time_limit_rows(i), 1)
+                },
             }
             for i in dict.fromkeys(tl_ids)
         }
@@ -2470,6 +2476,174 @@ def action_11901(payload: dict, player: Player, session: Session, store: Store) 
         }
     envelope["CompetitionRankCfg"] = cfgs
     return envelope
+
+
+# --------------------------------------------------------------------------
+# 11902/11903/11904 — time-limited events (_limitTimeMod / limitTimeScene)
+# --------------------------------------------------------------------------
+# The Time Limited icon fires 11902 before the scene opens; its callback
+# feeds TimeLimitAwardGet/TimeLimitComplete to setActivityComplete, which
+# builds L1_1[id] = {complete, awardget}.  Missing per-id entries make
+# limitTimeSubDialog.dataProcess call pairs(nil) (device log 2026-11-18
+# 12:50:37: _onRelease -> selectIndex -> new -> dataProcess -> pairs).
+# Official 11902 shape (v7 capture): string ids -> arrays of 0/1 flags and
+# int progress.  Our progress stays 0 (no v2 action maps to v7 counters).
+_TIME_LIMIT_EXPIRATION = 86400  # ConfigEnvSet "TimeLimitExpirationSeconds"
+
+# Original award rows, quoted from the official 11904 responses (activity 9
+# stages 1-5: 50k silver + item 201 + item 203).  Activities 1-8 keep neutral
+# empty AwardCfg: their captured v7 rewards use item ids absent from the v2
+# TcItem, so the v2 client cannot render their icons.
+# JUDGMENT CALLS (not in the capture): RequireNum 0 makes these original
+# rewards claimable; IsShow 1 keeps the rows visible.
+_TIME_LIMIT_AWARD_CFG: dict[int, list[dict]] = {
+    9: [
+        {"IsShow": 1, "RequireNum": 0,
+         "Award": [{"ItemId": 2, "Num": 50000},
+                   {"ItemId": 201, "Num": 1},
+                   {"ItemId": 203, "Num": 1}]}
+        for _stage in range(1, 6)
+    ],
+}
+
+
+def _time_limit_rows(activity_id: int) -> list[dict]:
+    return [
+        {**row, "Award": [dict(item) for item in row.get("Award") or []]}
+        for row in _TIME_LIMIT_AWARD_CFG.get(int(activity_id), [])
+    ]
+
+
+def _time_limit_ids(player: Player) -> list[int]:
+    activity = player.data.get("Activity")
+    queued = activity.get("TimeLimitActivity") if isinstance(activity, dict) else None
+    ids: list[int] = []
+    if isinstance(queued, list):
+        for entry in queued:
+            if isinstance(entry, dict):
+                try:
+                    activity_id = int(entry.get("Id"))
+                except (TypeError, ValueError):
+                    continue
+                if activity_id > 0 and activity_id not in ids:
+                    ids.append(activity_id)
+    return ids or list(range(1, 10))
+
+
+def _time_limit_state(player: Player) -> tuple[dict, dict]:
+    award_get = player.data.get("TimeLimitAwardGet")
+    if not isinstance(award_get, dict):
+        award_get = {}
+        player.data["TimeLimitAwardGet"] = award_get
+    complete = player.data.get("TimeLimitComplete")
+    if not isinstance(complete, dict):
+        complete = {}
+        player.data["TimeLimitComplete"] = complete
+    return award_get, complete
+
+
+def _time_limit_flags(award_get: dict, activity_id: int, row_count: int) -> list[int]:
+    raw = award_get.get(str(activity_id))
+    flags = [int(f) for f in raw] if isinstance(raw, list) else []
+    if len(flags) < row_count:
+        flags += [0] * (row_count - len(flags))
+    return flags
+
+
+def _time_limit_window_open(ts: int | None = None) -> bool:
+    now = _game_time(ts)
+    try:
+        start = datetime.datetime.strptime(
+            _TIME_LIMIT_SCHEDULE[0], _GAME_DATE_FMT).replace(tzinfo=_GAME_TZ)
+        end = datetime.datetime.strptime(
+            _TIME_LIMIT_SCHEDULE[1], _GAME_DATE_FMT).replace(tzinfo=_GAME_TZ)
+    except ValueError:
+        return False
+    return start <= now <= end + datetime.timedelta(seconds=_TIME_LIMIT_EXPIRATION)
+
+
+def action_11902(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_limitTimeMod.netActivitySchedule: every advertised id must appear in
+    both maps, with flags as a list, or the sub scene's dataProcess pairs(nil)s.
+    """
+    award_get, complete = _time_limit_state(player)
+    served: dict[str, list[int]] = {}
+    progress: dict[str, int] = {}
+    for activity_id in _time_limit_ids(player):
+        rows = _time_limit_rows(activity_id)
+        served[str(activity_id)] = _time_limit_flags(award_get, activity_id, len(rows))
+        progress[str(activity_id)] = _as_int(complete.get(str(activity_id)))
+    return {"TimeLimitAwardGet": served, "TimeLimitComplete": progress}
+
+
+def action_11903(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_limitTimeMod.netActivityRank -> RankList (array of {NickName, Score,
+    RId}) and RankSelf ([rank, score]).  Rows are real dev-store players
+    ranked by their persisted TimeLimitComplete[activityId]; no fake ranks.
+    """
+    activity_id = _as_int(payload.get("ActivityId"))
+    rows: list[dict] = []
+    scores: dict[str, int] = {}
+    for uid, data in _ranking_players(store, player).items():
+        complete = data.get("TimeLimitComplete") if isinstance(data, dict) else None
+        score = _as_int(complete.get(str(activity_id))) if isinstance(complete, dict) else 0
+        scores[uid] = score
+        base = data.get("RoleBase") if isinstance(data.get("RoleBase"), dict) else {}
+        rows.append({
+            "NickName": str(base.get("Nickname") or ""),
+            "Score": score,
+            "RId": str(base.get("Rid") or uid),
+        })
+    rows.sort(key=lambda r: (-r["Score"], r["RId"]))
+    base = player.data.get("RoleBase") if isinstance(player.data.get("RoleBase"), dict) else {}
+    self_id = str(base.get("Rid") or player.uid)
+    self_rank = 0
+    for index, row in enumerate(rows, 1):
+        if row["RId"] == self_id:
+            self_rank = index
+            break
+    return {"RankList": rows, "RankSelf": [self_rank, scores.get(str(player.uid), 0)]}
+
+
+def action_11904(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_limitTimeMod.netGetAward: claim one stage with the original award rows.
+    Validates window / bounds / claimed flag / progress; grants only config
+    amounts and persists the flag for the next 11902.
+    """
+    activity_id = _as_int(payload.get("ActivityId"))
+    if activity_id <= 0:
+        return {"_fail": "Unknown activity"}
+    stage = _as_int(payload.get("Stage"))
+    rows = _time_limit_rows(activity_id)
+    if not rows or not 1 <= stage <= len(rows):
+        return {"_fail": "No reward available"}
+    row = rows[stage - 1]
+    if not _time_limit_window_open():
+        return {"_fail": "Event over"}
+    award_get, complete = _time_limit_state(player)
+    flags = _time_limit_flags(award_get, activity_id, len(rows))
+    if flags[stage - 1]:
+        return {"_fail": "Already claimed"}
+    if _as_int(complete.get(str(activity_id))) < _as_int(row.get("RequireNum")):
+        return {"_fail": "Not enough progress"}
+    bag_ids: list[int] = []
+    role_data = player.data.setdefault("RoleData", {})
+    for item in row.get("Award") or []:
+        item_id = _as_int(item.get("ItemId"))
+        num = _as_int(item.get("Num"))
+        if item_id <= 0 or num <= 0:
+            continue
+        key = _REMAIN_LIST_MAP.get(item_id)
+        if key is not None:
+            role_data[key] = _as_int(role_data.get(key)) + num
+        else:
+            _role_item_add(player, item_id, num)
+            bag_ids.append(item_id)
+    flags[stage - 1] = 1
+    award_get[str(activity_id)] = flags
+    store.save(player)
+    response = {"FinalShowAwardCfg": [dict(item) for item in row["Award"]]}
+    return attach_remain_list(response, player, items=bag_ids)
 
 
 # action_achieve / action_achieve_claim live in the achievements section above.
@@ -3627,7 +3801,7 @@ def action_instance_info(payload: dict, player: Player, session: Session, store:
     return {
         "BossSingleUTC": _boss_window("BossSingleUTC"),
         "BossGlobalUTC": _boss_window("BossGlobalUTC"),
-        "BossSingleComplete": 0,
+        "BossSingleComplete": _boss_single_complete(player),
         "DamageRankAward": {"RemainList": [], "RoleRank": 0},
         "BossGlobalDead": {},
     }
@@ -3654,6 +3828,139 @@ def action_instance_store(payload: dict, player: Player, session: Session, store
       ItemList  -> initStoreData indexes A0_2[1] (safe when empty)
     The shop items themselves come from the client's own credit config."""
     return {"RoleScore": _boss_credits(player), "ItemList": []}
+
+
+# --- Hunting Grounds fight state (11802 info / 11803 attack) ----------------
+# Wave table: original configs/settings.TcBossSingle.lua (20 waves, Stage 1
+# HP 20010 "wildDuck", Stage 2 HP 450310 "rabbit").  The v7 oracle confirms
+# both on the wire (v7_actions.jsonl 214/220), so no HP value is invented.
+def _boss_single_rows() -> list:
+    rows = v2configs.load("TcBossSingle")
+    if isinstance(rows, dict):
+        rows = list(rows.values())
+    return [r for r in rows if isinstance(r, dict) and int(r.get("Stage") or 0) > 0]
+
+
+def _boss_single_wave(stage: int) -> dict:
+    return next((r for r in _boss_single_rows()
+                 if int(r.get("Stage") or 0) == int(stage)), {})
+
+
+def _boss_single_max_stage() -> int:
+    return max((int(r.get("Stage") or 0) for r in _boss_single_rows()), default=0)
+
+
+_BOSS_SINGLE_STATE_KEY = "BossSingleFight"
+
+
+def _boss_single_state(player: Player) -> dict:
+    """Per-UTC+3-game-day wave state: {Day, BossId, BossHP, Attacks}.
+
+    A new game day restarts at wave 1 / full HP / empty allotment.  Attacks
+    persisting across waves within a day is oracle-backed (v7_actions.jsonl
+    220 kept CounsellorAttackData after the wave 1 -> 2 rotation).
+    """
+    day = _game_time().strftime("%Y-%m-%d")
+    state = player.data.get(_BOSS_SINGLE_STATE_KEY)
+    if not isinstance(state, dict) or state.get("Day") != day:
+        state = {
+            "Day": day,
+            "BossId": 1,
+            "BossHP": int(_boss_single_wave(1).get("HP") or 0),
+            "Attacks": {},
+        }
+        player.data[_BOSS_SINGLE_STATE_KEY] = state
+    return state
+
+
+def _boss_single_complete(player: Player) -> int:
+    state = player.data.get(_BOSS_SINGLE_STATE_KEY)
+    if not isinstance(state, dict):
+        return 0
+    if state.get("Day") != _game_time().strftime("%Y-%m-%d"):
+        return 0
+    # Do NOT use `state.get("BossId") or -1`: 0 is falsy in Python and would
+    # turn the completed marker into -1.  Only None/missing is "not recorded".
+    raw = state.get("BossId")
+    if raw is None:
+        return 0
+    return 1 if int(raw) == 0 else 0
+
+
+def action_instance_boss_info(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_instanceMod netBossInfomation (11802): the client reads BossId/BossHP/
+    BossHPMax (set_cur_enemy) and CounsellorAttackData (truthiness gate), and
+    draws the animal from its own TcBossSingle by BossId.  With no handler the
+    generic fallback had none of these fields -> no animal appeared.
+    """
+    if not _boss_single_wave(1):
+        return {"_fail": "TcBossSingle config missing"}
+    state = _boss_single_state(player)
+    boss_id = int(state.get("BossId") or 0)
+    complete = boss_id == 0
+    wave = _boss_single_wave(boss_id) if not complete else {}
+    store.save(player)
+    return {
+        "BossId": boss_id,
+        "BossHP": 0 if complete else int(state.get("BossHP") or 0),
+        "BossHPMax": 0 if complete else int(wave.get("HP") or 0),
+        "CounsellorAttackData": dict(state.get("Attacks") or {}),
+        "RecoverCountList": [], "BoxRewardList": [],
+        "BossSingleComplete": 1 if complete else 0,
+    }
+
+
+def action_instance_boss_attack(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_instanceMod netAttack (11803 {CounsellorId, IsHeadShot}).  Per-attack
+    damage is not recoverable from any config; the single captured official
+    attack killed a full-HP wave, so we deal exactly the wave's remaining HP
+    (one attack per wave) with every number from TcBossSingle.
+    """
+    if not _boss_single_wave(1):
+        return {"_fail": "TcBossSingle config missing"}
+    try:
+        counsellor_id = int(payload.get("CounsellorId") or 0)
+    except (TypeError, ValueError):
+        counsellor_id = 0
+    unlocked = {int(c.get("CounsellorId") or 0)
+                for c in (player.data.get("RoleCounsellor") or [])
+                if isinstance(c, dict) and not int(c.get("IsLock") or 0)}
+    state = _boss_single_state(player)
+    attacks = state.setdefault("Attacks", {})
+    if (counsellor_id not in unlocked or str(counsellor_id) in attacks
+            or int(state.get("BossId") or 0) == 0):
+        return {"BossStasus": 1}
+    hp = int(state.get("BossHP") or 0)
+    damage = float(hp)
+    if payload.get("IsHeadShot"):
+        try:
+            damage *= float(v2configs.env_value("BossSingleHeadShotDamage", 1) or 1)
+        except (TypeError, ValueError):
+            pass
+    hp = max(0, hp - int(math.floor(damage)))
+    attacks[str(counsellor_id)] = 1
+    if hp > 0:
+        state["BossHP"] = hp
+    else:
+        nxt = int(state.get("BossId") or 0) + 1
+        row = _boss_single_wave(nxt)
+        if row and nxt <= _boss_single_max_stage():
+            state["BossId"], state["BossHP"] = nxt, int(row.get("HP") or 0)
+        else:
+            state["BossId"], state["BossHP"] = 0, 0
+    complete = int(state.get("BossId") or 0) == 0
+    wave = _boss_single_wave(state.get("BossId") or 0) if not complete else {}
+    store.save(player)
+    data = {
+        "BossId": int(state.get("BossId") or 0),
+        "BossHP": int(state.get("BossHP") or 0),
+        "BossHPMax": int(wave.get("HP") or 0),
+        "CounsellorAttackData": dict(attacks),
+        "IsComplete": 1 if complete else 0,
+        "IsBoxAward": 0,
+        "RecoverCountList": [{"MinisterId": counsellor_id, "RecoverCount": 0}],
+    }
+    return attach_remain_list(data, player, items=[9, 10])
 
 
 # --------------------------------------------------------------------------
@@ -4509,6 +4816,9 @@ HANDLERS = {
     "11302": action_daily_task_claim,
     "11303": action_activity_award_claim,
     "11901": action_11901,
+    "11902": action_11902,
+    "11903": action_11903,
+    "11904": action_11904,
     "11201": action_achieve,
     "11202": action_achieve_claim,
     "11101": action_store_items,
@@ -4536,6 +4846,8 @@ HANDLERS = {
     "10103": action_counsellor_peerage,
     "10106": action_counsellor_skin,
     "11801": action_instance_info,
+    "11802": action_instance_boss_info,
+    "11803": action_instance_boss_attack,
     "11808": action_instance_rank,
     "11810": action_instance_store,
     "10401": action_wives_call,
