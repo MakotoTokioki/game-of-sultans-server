@@ -257,7 +257,41 @@ def test_scripted_tutorial_battle_rewards() -> None:
           "RemainList" not in handlers.action_stage_info({}, p3, None, MemStore()))
 
 
+def test_levy_quest_counts_lifetime_levies() -> None:
+    """Levies count across the whole play, not only while the quest is
+    active: the RequireNum chain (3, 6, 12, 20...) is cumulative."""
+    from gos import tasks as taskmod
+    p = make_player("levylifetime")
+    # quest 1 = silver levies (type 12), currently active
+    taskmod.set_task(p.data, 1, 0)
+    taskmod.apply_levy(p.data, taskmod.LEVY_TYPE_BY_INDEX[2])  # grain
+    check("grain levy while silver quest active does not bump it",
+          taskmod.get_task_num(p.data) == 0, p.data["mainTaskProgress"])
+    # advancing to the grain quest must pick up the earlier grain levy
+    taskmod.advance_task(p.data)
+    check("grain quest starts with the earlier grain levy counted",
+          taskmod.get_task_id(p.data) == 2 and taskmod.get_task_num(p.data) == 1,
+          p.data["mainTaskProgress"])
+    taskmod.apply_levy(p.data, taskmod.LEVY_TYPE_BY_INDEX[2])
+    taskmod.apply_levy(p.data, taskmod.LEVY_TYPE_BY_INDEX[2])
+    check("three total grain levies fill the 3-levy quest",
+          taskmod.get_task_num(p.data) == 3, p.data["mainTaskProgress"])
+    check("lifetime counters persist on the player",
+          p.data["LifetimeLevyCounters"]["LevyGrain"] == 3,
+          p.data["LifetimeLevyCounters"])
+    # claiming advances through the chain; when a later grain quest (id 8,
+    # RequireNum 6) becomes current it inherits the lifetime total of 3.
+    taskmod.claim(p.data)
+    check("claim advances to the next chain id",
+          taskmod.get_task_id(p.data) == 3, p.data["mainTaskProgress"])
+    taskmod.set_task(p.data, 8, 0)
+    taskmod._refresh_levy_task_num(p.data)
+    check("later grain quest starts at 3/6 from lifetime history",
+          taskmod.get_task_num(p.data) == 3, p.data["mainTaskProgress"])
+
+
 def main() -> None:
+    test_levy_quest_counts_lifetime_levies()
     test_scripted_tutorial_battle_rewards()
     test_levy_advances_only_matching_task_type()
     test_login_syncs_main_task()

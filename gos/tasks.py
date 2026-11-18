@@ -137,6 +137,9 @@ def advance_task(player: dict) -> None:
         # (getTaskStatus returns "FINISH" when TcMainTask[taskId] is nil), so
         # pin the counter and keep the id stable.
         set_task(player, task_id, 0)
+    # Levy quests are cumulative: the next threshold may already be met by
+    # levies done while earlier quests were current.
+    _refresh_levy_task_num(player)
 
 
 def sync_task(player: dict) -> None:
@@ -255,24 +258,58 @@ def apply_stage_info(player: dict) -> None:
 
 
 # TcMainTaskTypeName: 11 = 征粮 (grain), 12 = 贸易 (trade/silver),
-# 13 = 募兵 (soldier).  A levy only advances a main task whose MainTaskType
-# matches the resource actually collected.
+# 13 = 募兵 (soldier).  The rising RequireNum chain (3, 6, 12, 20, 40, …)
+# is a set of CUMULATIVE lifetime thresholds, not per-quest counters: a
+# "levy grain 3 times" quest counts every grain levy in the play, including
+# those done before the quest became current.
 LEVY_TYPE_BY_INDEX = {1: 12, 2: 11, 3: 13}  # CollectType index -> MainTaskType
-_LEVY_TASK_TYPES = set(LEVY_TYPE_BY_INDEX.values())
+_LEVY_COUNTER_BY_TYPE = {11: "LevyGrain", 12: "LevySilver", 13: "LevySoldiers"}
+_LEVY_COUNTER_KEYS = tuple(_LEVY_COUNTER_BY_TYPE.values())
+_LIFETIME_LEVY_KEY = "LifetimeLevyCounters"
+
+
+def _lifetime_levy_counters(player: dict) -> dict:
+    counters = player.get(_LIFETIME_LEVY_KEY)
+    if not isinstance(counters, dict):
+        counters = {}
+        player[_LIFETIME_LEVY_KEY] = counters
+    # Legacy accounts: seed from today's counters so levy history is kept.
+    daily = player.get("DailyCounters")
+    if isinstance(daily, dict):
+        for key in _LEVY_COUNTER_KEYS:
+            if key not in counters:
+                counters[key] = int(daily.get(key) or 0)
+    return counters
+
+
+def _refresh_levy_task_num(player: dict) -> None:
+    """Recompute the current levy quest's progress from the lifetime total."""
+    task_id = get_task_id(player)
+    key = _LEVY_COUNTER_BY_TYPE.get(task_type(task_id))
+    if key is None:
+        return
+    total = int(_lifetime_levy_counters(player).get(key) or 0)
+    need = _require_num(task_id) or 0
+    prog = _task_num(player)
+    prog["taskNum"] = min(total, need) if need > 0 else total
+    _sync_login_fields(player)
 
 
 def apply_levy(player: dict, levy_type: int | None = None) -> None:
     """action10001/10002 (levy collect / timer recovery).
 
-    Only the three levy task types (11 grain / 12 trade / 13 soldier) may be
-    advanced, and only by the matching resource.  Previously ANY levy bumped
-    whatever task was current, so collecting Silver advanced the Soldier-
-    recruitment quest.  ``levy_type=None`` is the one-key collect covering all
-    three resources, which advances any levy-type task once.
+    Count the collected resource in a persistent lifetime total, then derive
+    the current quest's progress from it.  ``levy_type=None`` is the one-key
+    collect covering all three resources.
     """
-    current = task_type(get_task_id(player))
-    if current not in _LEVY_TASK_TYPES:
-        return
-    if levy_type is not None and current != levy_type:
-        return
-    bump_task_num(player, 1)
+    counters = _lifetime_levy_counters(player)
+    if levy_type is None:
+        keys = _LEVY_COUNTER_KEYS
+    else:
+        key = _LEVY_COUNTER_BY_TYPE.get(levy_type)
+        if key is None:
+            return
+        keys = (key,)
+    for counter_key in keys:
+        counters[counter_key] = int(counters.get(counter_key) or 0) + 1
+    _refresh_levy_task_num(player)
