@@ -120,10 +120,13 @@ def test_11901_bad_requests() -> None:
     def call(payload: dict) -> dict:
         return handlers.action_11901(payload, player, session, store)
 
-    check("empty payload tolerated", call({}) == {})
-    check("empty id list tolerated", call({"CompetitionRank": []}) == {})
-    check("non-list tolerated", call({"CompetitionRank": "CompetitionRank"}) == {})
-    check("empty dict payload tolerated (no crash)", call({}) == {}, call({}))
+    names = set(handlers._SETTING_CATCH_CFG_NAMES)
+    check("empty payload still returns the full config envelope",
+          set(call({})) >= names | {"CrossChat"}, call({}))
+    check("empty id list still returns the full config envelope",
+          set(call({"CompetitionRank": []})) >= names, call({"CompetitionRank": []}))
+    check("non-list tolerated", set(call({"CompetitionRank": "CompetitionRank"})) >= names)
+    check("empty dict payload tolerated (no crash)", set(call({})) >= names)
 
     junk = call({"CompetitionRank": [None, "a", 1]})
     check("junk entries filtered, valid id answered",
@@ -131,10 +134,12 @@ def test_11901_bad_requests() -> None:
 
     unknown = call({"CompetitionRank": [9]})
     check("unknown ids keep the envelope (client indexes response[name][str(Id)])",
-          unknown == {"CompetitionRankCfg": {}}, unknown)
+          unknown.get("CompetitionRankCfg") == {}
+          and set(unknown) >= set(handlers._SETTING_CATCH_CFG_NAMES), unknown)
 
-    check("unknown activity keys ignored",
-          call({"Promotions": [1], "PackageActivity": [1]}) == {})
+    check("unknown activity keys still get the full envelope",
+          set(call({"Promotions": [1], "PackageActivity": [1]}))
+          >= set(handlers._SETTING_CATCH_CFG_NAMES))
     mixed = call({"CompetitionRank": [1, 2, 3], "Promotions": [1]})
     check("CompetitionRank answered alongside unknown keys",
           sorted((mixed.get("CompetitionRankCfg") or {}).keys()) == ["1", "2", "3"], mixed)

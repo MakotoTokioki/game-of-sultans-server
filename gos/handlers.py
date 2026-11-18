@@ -2178,6 +2178,25 @@ _COMPETITION_RANK_SCHEDULE: dict[int, tuple[str, str]] = {
 }
 _COMPETITION_RANK_ACTIVITY_TYPE: dict[int, int] = {1: 1, 2: 2, 3: 13}
 
+# _settingCatchMod.lua registers one descriptor per activity config.  The
+# official 11901 response carries ALL of these "<name>" keys (verified in the
+# v7 capture).  We previously returned only CompetitionRankCfg (+CrossChat),
+# so listeners for the other activities received nil and several called
+# pairs(nil) on __login, aborting the rest of the response callback chain —
+# including the ranking-activity state update that ranking tabs depend on.
+# An empty table is the neutral original-shaped value; no schedule or reward
+# is invented for activities the v2 client never exercises here.
+_SETTING_CATCH_CFG_NAMES = (
+    "TimeLimitCfg", "CompetitionRankCfg", "CounsellorExchangeCfg",
+    "UniversalCfg", "UniversalItem", "BoardCfg", "LampCfg",
+    "RechargeActivityCfg", "PackageActivityCfg", "SeaKingActivityCfg",
+    "RelicActivityCfg", "CrossCompetitionRankCfg", "CommanderActivityCfg",
+    "CrossChatCfg", "HorseRaceActivityCfg", "TimeLimitSynthesisActivityCfg",
+    "ValentineActivityCfg", "CrossWarCfg", "MarketingLoginActivityCfg",
+    "MarketingLuckyDrawActivityCfg", "MarketingGroupBuyActivityCfg",
+    "RamadanCfg", "KingBossCfg",
+)
+
 
 def action_11901(payload: dict, player: Player, session: Session, store: Store) -> dict:
     requested = payload.get("CompetitionRank")
@@ -2188,8 +2207,16 @@ def action_11901(payload: dict, player: Player, session: Session, store: Store) 
                 ids.append(int(item))
             except (TypeError, ValueError):
                 continue
+    # _settingCatchMod's listeners iterate every "<name>Cfg" key on the
+    # response; a missing key is nil and breaks pairs()/indexing mid-chain.
+    # Always return the full original-shaped envelope, even when no ids were
+    # requested (the client may still dispatch activityRefresh on it).
+    envelope: dict[str, Any] = {name: {} for name in _SETTING_CATCH_CFG_NAMES}
+    # Kept from the earlier chat fix: _chatMod.setCrossChat reads the bare
+    # CrossChat key as well as CrossChatCfg; sending both is harmless.
+    envelope["CrossChat"] = []
     if not ids:
-        return {}
+        return envelope
     # saveRouteSetting indexes response["CompetitionRankCfg"][tostring(Id)] for
     # every requested id, so the table must exist even when all ids are
     # unknown to us (missing entries would make the client index nil);
@@ -2205,12 +2232,8 @@ def action_11901(payload: dict, player: Player, session: Session, store: Store) 
             "StartTime": schedule[0],
             "EndTime": schedule[1],
         }
-    # _settingCatchMod has a "CrossChat" entry whose listener is
-    # _chatMod.setCrossChat.  Without it chat's cross-chat config stays nil
-    # and getOpenCrossAtyData() calls pairs(nil) on chat open.  No v2 config
-    # defines an active cross-chat event, so an empty table is the neutral
-    # original-shaped value (setCrossChat(nil) also normalises it to {}).
-    return {"CompetitionRankCfg": cfgs, "CrossChat": []}
+    envelope["CompetitionRankCfg"] = cfgs
+    return envelope
 
 
 # action_achieve / action_achieve_claim live in the achievements section above.
