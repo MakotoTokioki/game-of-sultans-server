@@ -1321,7 +1321,7 @@ def action_manage_assets(payload: dict, player: Player, session: Session, store:
     for item_id, amount in grants:
         key = _REMAIN_LIST_MAP[item_id]
         role_data[key] = int(role_data.get(key) or 0) + amount
-    tasks.apply_levy(player.data)
+    tasks.apply_levy(player.data, tasks.LEVY_TYPE_BY_INDEX.get(index))
     store.save(player)
     # _manageAssetsMod's 10001 callback only stores LevyTimeUTC; the resource
     # gain reaches the top bar solely through RemainList -> setCurrRewardData.
@@ -1382,7 +1382,7 @@ def action_recover(payload: dict, player: Player, session: Session, store: Store
         stamps[index - 1] = max(floor_ts, stamps[index - 1] - times * cd)
         over_times = [max(0, now - stamps[index - 1])]
     role_data["LevyTimeUTC"] = stamps
-    tasks.apply_levy(player.data)
+    tasks.apply_levy(player.data, tasks.LEVY_TYPE_BY_INDEX.get(index))
     store.save(player)
     data = {"LevyTimeUTC": list(stamps)}
     data.update(_levy_v7_fields(over_times, revenue))

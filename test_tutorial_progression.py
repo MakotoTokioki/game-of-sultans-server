@@ -194,7 +194,34 @@ def test_stage_counter_clamps_and_level_up_gate() -> None:
           player.data["RoleData"]["Exp"])
 
 
+def test_levy_advances_only_matching_task_type() -> None:
+    """TcMainTaskTypeName: 11 grain, 12 trade/silver, 13 soldier.
+
+    Levying Silver must not advance the soldier-recruitment quest (id 3).
+    """
+    from gos import tasks as taskmod
+    p = make_player("levytype")
+    # quest 3 = soldier recruitment (MainTaskType 13), requirement 3
+    taskmod.set_task(p.data, 3, 0)
+    taskmod.apply_levy(p.data, taskmod.LEVY_TYPE_BY_INDEX[1])  # silver
+    check("silver levy does not advance soldier quest",
+          taskmod.get_task_num(p.data) == 0, p.data["mainTaskProgress"])
+    taskmod.apply_levy(p.data, taskmod.LEVY_TYPE_BY_INDEX[2])  # grain
+    check("grain levy does not advance soldier quest",
+          taskmod.get_task_num(p.data) == 0, p.data["mainTaskProgress"])
+    taskmod.apply_levy(p.data, taskmod.LEVY_TYPE_BY_INDEX[3])  # soldier
+    check("soldier levy advances soldier quest",
+          taskmod.get_task_num(p.data) == 1, p.data["mainTaskProgress"])
+    # non-levy quests are untouched by any levy
+    taskmod.set_task(p.data, 5, 0)  # type 3 (limited-level ministers)
+    taskmod.apply_levy(p.data, taskmod.LEVY_TYPE_BY_INDEX[1])
+    taskmod.apply_levy(p.data, None)
+    check("non-levy quest ignores all levies",
+          taskmod.get_task_num(p.data) == 0, p.data["mainTaskProgress"])
+
+
 def main() -> None:
+    test_levy_advances_only_matching_task_type()
     test_login_syncs_main_task()
     test_guide_status_does_not_bump_stage_task()
     test_stage_fight_grants_exp_and_advances()

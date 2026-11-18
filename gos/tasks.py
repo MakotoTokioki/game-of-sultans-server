@@ -254,9 +254,25 @@ def apply_stage_info(player: dict) -> None:
     return
 
 
-def apply_levy(player: dict) -> None:
-    """action10001/10002 (idle levy collect).  Stage tasks count phases, not
-    levies, so they must not be bumped by this source."""
-    if task_type(get_task_id(player)) == 9:
+# TcMainTaskTypeName: 11 = 征粮 (grain), 12 = 贸易 (trade/silver),
+# 13 = 募兵 (soldier).  A levy only advances a main task whose MainTaskType
+# matches the resource actually collected.
+LEVY_TYPE_BY_INDEX = {1: 12, 2: 11, 3: 13}  # CollectType index -> MainTaskType
+_LEVY_TASK_TYPES = set(LEVY_TYPE_BY_INDEX.values())
+
+
+def apply_levy(player: dict, levy_type: int | None = None) -> None:
+    """action10001/10002 (levy collect / timer recovery).
+
+    Only the three levy task types (11 grain / 12 trade / 13 soldier) may be
+    advanced, and only by the matching resource.  Previously ANY levy bumped
+    whatever task was current, so collecting Silver advanced the Soldier-
+    recruitment quest.  ``levy_type=None`` is the one-key collect covering all
+    three resources, which advances any levy-type task once.
+    """
+    current = task_type(get_task_id(player))
+    if current not in _LEVY_TASK_TYPES:
+        return
+    if levy_type is not None and current != levy_type:
         return
     bump_task_num(player, 1)
