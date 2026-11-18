@@ -9,7 +9,9 @@ bundled config; no beauty or reward is invented.
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import random as _rng
 import sys
 import tempfile
 from pathlib import Path
@@ -82,8 +84,9 @@ def test_10601_top_level_fields() -> None:
     need = {"VitalityTime", "FateTime", "Fate", "Vitality", "PraiseGuide"}
     check("10601 returns all top-level fields the callback reads",
           need <= set(d), d)
-    check("10601 EventType is 0 and RemainList is a safe empty table",
-          d.get("EventType") == 0 and d.get("RemainList") == [], d)
+    check("10601 EventType is a valid config-driven type",
+          d.get("EventType") in (0, 1, 2)
+          and isinstance(d.get("RemainList"), list), d)
     visit = player.data["VisitData"]
     check("10601 plain values mirror VisitData",
           all(d[k] == visit[k] for k in ("Fate", "Vitality", "PraiseGuide")),
@@ -204,7 +207,101 @@ def test_all_find_actions_are_routed() -> None:
               sorted(handlers.HANDLERS))
 
 
+@contextlib.contextmanager
+def fixed_random(values, choice_first=True):
+    it = iter(values)
+    old_random, old_choice = _rng.random, _rng.choice
+    _rng.random = lambda: next(it)
+    if choice_first:
+        _rng.choice = lambda seq: seq[0]
+    try:
+        yield
+    finally:
+        _rng.random, _rng.choice = old_random, old_choice
+
+
+def test_10601_npc_encounters() -> None:
+    """TcVisitFate region [0,49] weights event 2 first (roll < 10/100)."""
+    p = make_player("npcvisit")
+    handlers._visit_data(p)
+    p.data["VisitData"]["Fate"] = 50   # post-deduction 48 -> region [0,49]
+    with fixed_random([0.0, 0.99]):    # pick event 2, then People[0]
+        d = handlers.action_visit_state({}, p, None, MemStore())
+    check("NPC meeting returns EventType 2",
+          d.get("EventType") == 2, d)
+    check("NPC meeting has VisitPeople and IsFirst=0",
+          d.get("VisitPeople") == 1 and d.get("IsFirst") == 0, d)
+    with fixed_random([0.0, 0.99]):
+        d2 = handlers.action_visit_state({}, p, None, MemStore())
+    check("second meeting has IsFirst=1 and is persisted",
+          d2.get("IsFirst") == 1
+          and p.data["VisitData"]["MetPeople"]["1"] == 2,
+          (d2, p.data["VisitData"].get("MetPeople")))
+
+
+def test_10601_npc_award() -> None:
+    p = make_player("npcaward")
+    handlers._visit_data(p)
+    p.data["VisitData"]["Fate"] = 50
+    before = int(p.data["RoleData"]["Silver"])
+    with fixed_random([0.0, 0.05]):  # event 2 roll, then award chance (0.1)
+        d = handlers.action_visit_state({}, p, None, MemStore())
+    check("NPC award credits Silver from TcVisitEvent.AwardRatio",
+          int(p.data["RoleData"]["Silver"]) == before + 1000,
+          (before, p.data["RoleData"]["Silver"]))
+    check("NPC award ships absolute RemainList row",
+          any(r.get("ItemId") == 2 and int(r.get("Num") or 0) == before + 1000
+              for r in d.get("RemainList", [])), d.get("RemainList"))
+
+
+def test_10601_consort_encounter() -> None:
+    p = make_player("consortvisit")
+    p.data["RoleBeauty"] = {"3": {"BeautyId": 3, "Intimacy": 4}}
+    with fixed_random([0.0]):  # region [91,inf] first entry = event 1
+        d = handlers.action_visit_state({}, p, None, MemStore())
+    check("consort meeting returns EventType 1",
+          d.get("EventType") == 1, d)
+    check("consort meeting ships the 1101 Intimacy entry",
+          d.get("RemainList") == [{"ItemId": 1101, "Num": 5, "BeautyId": 3}],
+          d.get("RemainList"))
+    check("consort Intimacy persisted",
+          p.data["RoleBeauty"]["3"]["Intimacy"] == 5,
+          p.data["RoleBeauty"])
+
+
+def test_10601_consort_without_wives_degrades() -> None:
+    p = make_player("nowives")
+    p.data["RoleBeauty"] = {}
+    with fixed_random([0.0]):
+        d = handlers.action_visit_state({}, p, None, MemStore())
+    check("no owned consort -> nothing event, no invented wife",
+          d.get("EventType") == 0 and d.get("RemainList") == [], d)
+
+
+def test_10601_nothing_event() -> None:
+    p = make_player("nothingvisit")
+    handlers._visit_data(p)
+    p.data["VisitData"]["Fate"] = 10  # post-deduction 8 -> region [0,49]
+    with fixed_random([0.9]):         # falls through to event 11 (nothing)
+        d = handlers.action_visit_state({}, p, None, MemStore())
+    check("nothing roll gives EventType 0 without MetPeople",
+          d.get("EventType") == 0 and "MetPeople" not in p.data["VisitData"], d)
+
+
+def test_10604_award_list_table() -> None:
+    p = make_player("awardlist")
+    d = handlers.action_visit_sync({}, p, None, MemStore())
+    check("10604 carries AwardList and PraiseGuide tables/values",
+          isinstance(d.get("AwardList"), list) and "PraiseGuide" in d, d)
+
+
 def main() -> None:
+    test_10601_npc_encounters()
+    test_10601_npc_award()
+    test_10601_consort_encounter()
+    test_10601_consort_without_wives_degrades()
+    test_10601_nothing_event()
+    test_10604_award_list_table()
     test_10602_visit_data_shape()
     test_10601_top_level_fields()
     test_10603_10604_10605_10606_mutate_visit_data()

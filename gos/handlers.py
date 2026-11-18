@@ -489,12 +489,11 @@ def action_login(payload: dict, player: Player, session: Session, store: Store) 
         player.data["RoleBase"]["DressSceneId"] = 1500
     if not player.data["RoleData"].get("DressSceneId"):
         player.data["RoleData"]["DressSceneId"] = 1500
-    # instanceMod.isShowInMain does getSortTime(tbData().BossSingleUTC) which
-    # indexes [1]/[2]; a scalar 0 here crashes with "attempt to index a
-    # number value" from topActivityDialog.createBtnActive.
-    for key in ("BossSingleUTC", "BossGlobalUTC"):
-        if not isinstance(player.data.get(key), list):
-            player.data[key] = [0, 0]
+    # instanceMod.isShowInMain indexes BossSingleUTC[1]/[2]; the official
+    # login snapshot carries the current game-day window (v7 capture 156).
+    # Seeding real windows instead of [0,0] is what makes the Frontier entry
+    # visible and the events open at their times.
+    _refresh_boss_windows(player)
     # _settingCatchMod.start queues login Activity entries with Version ~= -1
     # for an 11901 config fetch.  Accounts created before CompetitionRank was
     # added to defaults still persist "Activity": [], so heal the key here;
@@ -3576,6 +3575,36 @@ def _boss_utc(player: Player, key: str) -> list:
     return [0, 0]
 
 
+# Frontier event windows.  The official v7 capture carries the CURRENT game
+# day's windows in both the 10000 snapshot and the 11801 response
+# (v7_actions.jsonl 156/210/222):
+#   BossSingleUTC [1794819600, 1794826800] = 2026-11-16 12:00-14:00 GMT+3
+#   BossGlobalUTC [1794848400, 1794852000] = 2026-11-16 20:00-21:00 GMT+3
+# The v2 client gates the Frontier buttons on now ∈ [start,end) (instanceScene
+# 33-46/96-112) and its mod-86400 daily wrap assumes the same wall clock is
+# re-issued each day.  The client's own rule text says "12:00-14:00 (GMT +3)"
+# and "20:00-21:00 (GMT +3)" (Tcen.lua Rule_054/055), matching TimeZone:3.
+_BOSS_WINDOWS = {
+    "BossSingleUTC": (12, 0, 14, 0),   # Hunting Grounds
+    "BossGlobalUTC": (20, 0, 21, 0),   # Fortress Siege
+}
+
+
+def _boss_window(key: str, ts: int | None = None) -> list:
+    """Epoch window [start, end] for a Frontier event on the UTC+3 game day
+    containing ``ts`` (default now), in the oracle's absolute-epoch format."""
+    sh, sm, eh, em = _BOSS_WINDOWS[key]
+    day = _game_time(ts)
+    start = day.replace(hour=sh, minute=sm, second=0, microsecond=0)
+    end = day.replace(hour=eh, minute=em, second=0, microsecond=0)
+    return [int(start.timestamp()), int(end.timestamp())]
+
+
+def _refresh_boss_windows(player: Player) -> None:
+    for key in _BOSS_WINDOWS:
+        player.data[key] = _boss_window(key)
+
+
 def _boss_credits(player: Player) -> int:
     role_data = player.data.get("RoleData") or {}
     return int(role_data.get("BossCredits") or 0)
@@ -3591,9 +3620,13 @@ def action_instance_info(payload: dict, player: Player, session: Session, store:
       bossGlobalDead              -> consumers do `if it then it.KillerName`,
                                      so it must be a table or absent, never 0
     """
+    # Re-issue today's window on every page entry, exactly like the official
+    # capture (taken after the window but still carrying that day's times).
+    _refresh_boss_windows(player)
+    store.save(player)
     return {
-        "BossSingleUTC": _boss_utc(player, "BossSingleUTC"),
-        "BossGlobalUTC": _boss_utc(player, "BossGlobalUTC"),
+        "BossSingleUTC": _boss_window("BossSingleUTC"),
+        "BossGlobalUTC": _boss_window("BossGlobalUTC"),
         "BossSingleComplete": 0,
         "DamageRankAward": {"RemainList": [], "RoleRank": 0},
         "BossGlobalDead": {},
@@ -4031,6 +4064,147 @@ def _visit_data(player: Player) -> dict:
     return visit
 
 
+# --- Find / Masquerade encounter selection (10601) --------------------------
+# The 10601 response is authoritative: _findMod._getEvent (78-113) only maps
+# the server's EventType, and nothing client-side rolls TcVisitEvent/TcVisitFate.
+# So the server picks the outcome from the original configs:
+#   TcVisitFate: post-visit Fate selects the weighted [event id, weight] row.
+#   TcVisitEvent 11 == ConfigEnvSet.NothingEvent -> EventType 0.
+#   TcVisitEvent 1 (no People, no Award) -> EventType 1 (consort).
+#   TcVisitEvent 2-10 (People pool) -> EventType 2, with optional resource award.
+# Rewards ride the generic RemainList channel with ABSOLUTE values.
+def _visit_nothing_event_id() -> int:
+    return _as_int(v2configs.env_value("NothingEvent") or 0)
+
+
+def _visit_event_row(event_id: int) -> dict | None:
+    rows = v2configs.load("TcVisitEvent")
+    if not isinstance(rows, list):
+        return None
+    return next((r for r in rows if isinstance(r, dict)
+                 and _as_int(r.get("Id") or 0) == int(event_id)), None)
+
+
+def _visit_event_people(row: dict) -> list:
+    people = row.get("People")
+    if not isinstance(people, list):
+        return []
+    return [_as_int(pid) for pid in people if isinstance(pid, (int, float))]
+
+
+def _visit_fate_event(fate: int) -> int | None:
+    rows = v2configs.load("TcVisitFate")
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        region = row.get("Region")
+        if not (isinstance(region, list) and len(region) >= 2):
+            continue
+        try:
+            lo, hi = int(region[0]), int(region[1])
+        except (TypeError, ValueError):
+            continue
+        if not (lo <= fate <= hi):
+            continue
+        pairs = []
+        for event in row.get("Events") or []:
+            if isinstance(event, (list, tuple)) and len(event) >= 2:
+                try:
+                    weight = int(event[1])
+                except (TypeError, ValueError):
+                    continue
+                if weight > 0:
+                    pairs.append((int(event[0]), weight))
+        if not pairs:
+            return None
+        roll = random.random() * sum(w for _, w in pairs)
+        acc = 0
+        for event_id, weight in pairs:
+            acc += weight
+            if roll < acc:
+                return event_id
+        return pairs[-1][0]
+    return None
+
+
+def _visit_building_beauty_ids() -> set:
+    rows = v2configs.load("TcVisitBuilding")
+    out = set()
+    if isinstance(rows, list):
+        for row in rows:
+            people = row.get("People") if isinstance(row, dict) else None
+            if not isinstance(people, list):
+                continue
+            for pair in people:
+                if isinstance(pair, list) and len(pair) == 2 and _as_int(pair[0]) == 1:
+                    out.add(_as_int(pair[1]))
+    return out
+
+
+def _visit_owned_beauty_rows(player: Player) -> list:
+    wives = player.data.get("RoleBeauty")
+    rows: list = []
+    if isinstance(wives, dict):
+        for key, row in wives.items():
+            bid = row.get("BeautyId") if isinstance(row, dict) else None
+            if bid is None:
+                try:
+                    bid = int(key)
+                except (TypeError, ValueError):
+                    continue
+            rows.append((int(bid), row if isinstance(row, dict) else {}))
+    elif isinstance(wives, list):
+        for row in wives:
+            if isinstance(row, dict) and row.get("BeautyId") is not None:
+                rows.append((int(row["BeautyId"]), row))
+    return rows
+
+
+def _visit_consort_entry(player: Player) -> dict | None:
+    """RemainList[1] for a consort encounter: +1 Intimacy on an owned wife.
+
+    ItemId 1101 -> wife's Intimacy (itemMod.lua 22); Num is the absolute new
+    value.  Returns None when no eligible consort is owned, so the caller
+    keeps the nothing event rather than inventing a wife.
+    """
+    known = _visit_building_beauty_ids()
+    owned = [(bid, row) for bid, row in _visit_owned_beauty_rows(player)
+             if bid in known]
+    if not owned:
+        return None
+    beauty_id, row = random.choice(owned)
+    current = row.get("Intimacy")
+    new_intimacy = (int(current) if isinstance(current, (int, float)) else 0) + 1
+    row["Intimacy"] = new_intimacy
+    return {"ItemId": 1101, "Num": new_intimacy, "BeautyId": beauty_id}
+
+
+def _visit_people_result(player: Player, visit: dict, row: dict) -> dict | None:
+    """EventType 2 payload + optional resource award (absolute RemainList)."""
+    ids = _visit_event_people(row)
+    if not ids:
+        return None
+    people_id = random.choice(ids)
+    met = visit.setdefault("MetPeople", {})
+    key = str(people_id)
+    is_first = 0 if not _as_int(met.get(key) or 0) else 1
+    met[key] = _as_int(met.get(key) or 0) + 1
+    award_id = _as_int(row.get("Award") or 0)
+    ratio = row.get("AwardRatio")
+    if award_id in (2, 3, 4) and isinstance(ratio, list) and len(ratio) >= 2:
+        try:
+            chance, amount = float(ratio[0]), int(ratio[1])
+        except (TypeError, ValueError):
+            chance, amount = 0.0, 0
+        if amount > 0 and random.random() < chance:
+            key_name = {2: "Silver", 3: "Food", 4: "Soldier"}[award_id]
+            role_data = player.data.setdefault("RoleData", {})
+            role_data[key_name] = _as_int(role_data.get(key_name) or 0) + amount
+    return {"VisitPeople": people_id, "IsFirst": is_first}
+
+
 def action_visit_info(payload: dict, player: Player, session: Session, store: Store) -> dict:
     """_findMod.action10602: seed/extend the persisted VisitData slice."""
     visit = _visit_data(player)
@@ -4056,9 +4230,8 @@ def action_visit_state(payload: dict, player: Player, session: Session, store: S
     visit["Vitality"] = max(0, _as_int(visit.get("Vitality") or 0)
                             - _as_int(v2configs.env_value("VisitReduceVitality") or 0))
     visit["VitalityTime"] = now
-    store.save(player)
     out = _visit_client_slice(visit)
-    return {
+    response = {
         "VitalityTime": out["VitalityTime"],
         "FateTime": out["FateTime"],
         "Fate": out["Fate"],
@@ -4068,6 +4241,25 @@ def action_visit_state(payload: dict, player: Player, session: Session, store: S
         "RemainList": [],
         "SysTime": _now(),
     }
+    # Roll the visit from the original configs; fall back to the nothing
+    # event when the TcVisit* tables are unavailable.
+    event_id = _visit_fate_event(_as_int(out["Fate"]))
+    event_row = _visit_event_row(event_id) if event_id is not None else None
+    if event_row is not None and event_id != _visit_nothing_event_id():
+        if not _visit_event_people(event_row) and not _as_int(event_row.get("Award") or 0):
+            entry = _visit_consort_entry(player)
+            if entry is not None:
+                response["EventType"] = 1
+                response["RemainList"] = [entry]  # client reads RemainList[1]
+        else:
+            payload_out = _visit_people_result(player, visit, event_row)
+            if payload_out is not None:
+                response["EventType"] = 2
+                response["VisitPeople"] = payload_out["VisitPeople"]
+                response["IsFirst"] = payload_out["IsFirst"]
+                attach_remain_list(response, player)
+    store.save(player)
+    return response
 
 
 def action_visit_recover(payload: dict, player: Player, session: Session, store: Store) -> dict:
@@ -4091,6 +4283,9 @@ def action_visit_sync(payload: dict, player: Player, session: Session, store: St
     out = _visit_client_slice(visit)
     return {"Fate": out["Fate"], "Vitality": out["Vitality"],
             "VitalityTime": out["VitalityTime"], "FateTime": out["FateTime"],
+            # sortFindRespond does pairs(A0_2.AwardList) unguarded; an empty
+            # table keeps the one-key timer path safe.
+            "AwardList": [], "PraiseGuide": out["PraiseGuide"],
             "VisitData": out, "SysTime": now}
 
 
