@@ -1278,7 +1278,7 @@ def _levy_ticks_consumed(old_ts: int, new_ts: int, now: int, cd: int,
 
 
 def _levy_v7_fields(over_times: list[int], revenue: dict[int, int] | None = None,
-                    levy_list: dict | None = None) -> dict:
+                    levy_list: dict | None = None, miracle: bool = False) -> dict:
     """v7-shaped 10001/10002 fields.
 
     EstimatedRevenue now carries the config-derived per-tick production the
@@ -1295,7 +1295,7 @@ def _levy_v7_fields(over_times: list[int], revenue: dict[int, int] | None = None
         "LevyNum": 0,
         "LevyTriggerNum": 0,
         "LevySoldierNum": 0,
-        "MiracleTrigger": False,
+        "MiracleTrigger": miracle,
     }
 
 
@@ -1364,6 +1364,10 @@ def action_manage_assets(payload: dict, player: Player, session: Session, store:
             _bump_achievement(player, key)
             _bump_daily(player, key)
     role_data["LevyTimeUTC"] = stamps
+    # Sultan Boost: 15% chance (ConfigEnvSet) to multiply levy earnings 10x.
+    miracle = _miracle_roll() if grants else False
+    if miracle:
+        grants = [(item_id, amount * 10) for item_id, amount in grants]
     # Persist the absolute post-grant totals; the client overwrites its own
     # RoleData from RemainList (there is no other resource channel in v2).
     for item_id, amount in grants:
@@ -1375,8 +1379,8 @@ def action_manage_assets(payload: dict, player: Player, session: Session, store:
     # gain reaches the top bar solely through RemainList -> setCurrRewardData.
     first_item_id = grants[0][0] if grants else None
     levy_list = {str(index or 4): [{"ItemId": i, "Num": n} for i, n in grants]}
-    data = {"LevyTimeUTC": list(stamps)}
-    data.update(_levy_v7_fields(over_times, revenue, levy_list))
+    data = {"LevyTimeUTC": list(stamps), "MiracleTrigger": miracle}
+    data.update(_levy_v7_fields(over_times, revenue, levy_list, miracle=miracle))
     data = attach_task_progress(data, player)
     # Diagnostic: record the exact wire values for a collect so we can prove
     # the client clock resync (Data.SysTime), the anchor and the granted total.
@@ -3075,6 +3079,24 @@ def _as_int(value, default: int = 0) -> int:
         return default
 
 
+# --- Sultan Boost (client "MiracleTrigger") -------------------------------
+# ConfigEnvSet.MiracleProbability is [0.15] x7 in the original v2 config —
+# the real odds are 15%, not a guess.  The client plays a visual effect when
+# MiracleTrigger is true; the multiplied amounts ship in RemainList.  Client
+# text gives the multipliers: levy/affairs resources 10x, affairs EXP/books 3x,
+# ranking worship +110 instead of +10 (11x, proven by the v7 capture).
+def _miracle_roll() -> bool:
+    cfg = v2configs.load("ConfigEnvSet")
+    probs = cfg.get("MiracleProbability") if isinstance(cfg, dict) else None
+    chance = float(probs[0]) if isinstance(probs, list) and probs else 0.15
+    return random.random() < chance
+
+
+def _miracle_multiplier(item_id: int) -> int:
+    """Affairs: resources 10x, EXP/attribute items 3x (client text)."""
+    return 10 if int(item_id) in (2, 3, 4) else 3
+
+
 def _rank_section_record(section: dict) -> int:
     """Encode RoleSection -> the client's TotalSecRecord ordering.
 
@@ -3291,14 +3313,18 @@ def action_rank_worship(payload: dict, player: Player, session: Session, store: 
     if _game_day_number(rwt.get(key)) == _game_day_number(today):
         return {"MiracleTrigger": False}  # already collected today
     role_data = player.data.setdefault("RoleData", {})
-    gold = int(role_data.get("Gold") or 0) + 10
+    # Sultan Boost: the v7 capture has one MiracleTrigger=true worship with
+    # +110 instead of the usual +10 (11x total).
+    miracle = _miracle_roll()
+    increment = 110 if miracle else 10
+    gold = int(role_data.get("Gold") or 0) + increment
     role_data["Gold"] = gold
     rwt[key] = today
     store.save(player)
     return {
         "RemainList": [{"ItemId": 1, "Num": gold}],
-        "IncrRemainList": [{"ItemId": 1, "Num": 10}],
-        "MiracleTrigger": False,
+        "IncrRemainList": [{"ItemId": 1, "Num": increment}],
+        "MiracleTrigger": miracle,
     }
 
 
@@ -4631,7 +4657,8 @@ def _gov_role_power(player: Player, index: int) -> int:
 
 def _gov_response(player: Player, now: int | None = None,
                   first_item_id: int | None = None,
-                  items: list | None = None) -> dict:
+                  items: list | None = None,
+                  miracle: bool = False) -> dict:
     """Exact fields read by _governmentMod.action10702/10701 callbacks
     (modules/_governmentMod.lua 33-101) and governmentScene's updateEvent
     (scene 1842-1913: RemainList[1].ItemId, MiracleTrigger)."""
@@ -4647,7 +4674,7 @@ def _gov_response(player: Player, now: int | None = None,
         # v7 ships this boolean; the v2 scene does not read it, so keep it
         # neutral unless a real achievement has been recorded.
         "Achievement": bool(gov.get("AchievementClaimed")),
-        "MiracleTrigger": False,
+        "MiracleTrigger": miracle,
     }
     # Non-empty RemainList is mandatory: updateEvent indexes RemainList[1].
     # All values are absolute post-grant totals; first_item_id puts the
@@ -4686,6 +4713,9 @@ def action_government_event(payload: dict, player: Player, session: Session, sto
     row = next((r for r in _gov_rows() if int(r.get("Id") or 0) == current_id), {})
 
     option = int(payload.get("OptionNum") or 0)
+    # Sultan Boost: client text gives 10x for gold/grain/soldiers and 3x for
+    # Sultan EXP / attribute books (ConfigEnvSet odds = 15%).
+    miracle = _miracle_roll()
     granted_item_id: int | None = None
     granted_amount = 0
     bag_items: list[int] = []
@@ -4697,6 +4727,8 @@ def action_government_event(payload: dict, player: Player, session: Session, sto
             granted_amount = int(float(achievement or 0))
         except (TypeError, ValueError):
             granted_amount = 0
+        if miracle:
+            granted_amount *= 3  # "Player XP 3x"
         role_data["Exp"] = int(role_data.get("Exp") or 0) + granted_amount
     elif option == 1:
         item_id = int(row.get("ItemId") or 0)
@@ -4713,18 +4745,20 @@ def action_government_event(payload: dict, player: Player, session: Session, sto
             except (TypeError, ValueError):
                 rate = 0.0
             granted_amount = int(math.floor(base + rate * _gov_role_power(player, item_id)))
+            if miracle:
+                granted_amount *= 10  # "Gold/Grain/Soldier 10x"
             key = _REMAIN_LIST_MAP[item_id]
             role_data[key] = int(role_data.get(key) or 0) + granted_amount
         else:
             # governmentScene 1077-1079: any other ItemId grants exactly 1
             # of that item (the special events carry bag ItemIds 205/210/215).
-            granted_amount = 1
+            granted_amount = 3 if miracle else 1  # "Attribute Book/Tome 3x"
             if item_id >= 100:
-                _role_item_add(player, item_id, 1)
+                _role_item_add(player, item_id, granted_amount)
                 bag_items.append(item_id)
             elif item_id in _REMAIN_LIST_MAP:
                 key = _REMAIN_LIST_MAP[item_id]
-                role_data[key] = int(role_data.get(key) or 0) + 1
+                role_data[key] = int(role_data.get(key) or 0) + granted_amount
 
     anchor = int(role_data.get("GovTimeUTC") or now)
     # v7: each processed affair consumes ONE accumulated cooldown tick.  The
@@ -4752,7 +4786,7 @@ def action_government_event(payload: dict, player: Player, session: Session, sto
     store.save(player)
     return _gov_response(player, now,
                          first_item_id=granted_item_id if granted_amount else None,
-                         items=bag_items or None)
+                         items=bag_items or None, miracle=miracle)
 
 
 def action_government_info(payload: dict, player: Player, session: Session, store: Store) -> dict:

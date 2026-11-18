@@ -32,6 +32,9 @@ from gos import handlers
 from gos.defaults import default_player
 from gos.store import Player
 
+# Deterministic tests: Sultan Boost is a 15% random effect; disable it here.
+handlers._miracle_roll = lambda: False
+
 OK: list[bool] = []
 
 KEY = {2: "Silver", 3: "Food", 4: "Soldier"}
