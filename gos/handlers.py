@@ -1048,9 +1048,40 @@ def _stage_soldier_loss(chapter: int, section: int, phase: int,
     return int(math.floor(base * factor))
 
 
+# User-directed deviation from the official capture: the two SCRIPTED
+# tutorial battles (actions 10202/10204, guide statuses "stage"/"stage2")
+# carry no reward fields in v7, so the client shows all-zero Victory screens.
+# Per explicit request, grant a one-time 20 EXP / 1000 Silver per scripted
+# stage so the popup has real values.  These amounts are user-specified, NOT
+# derived from the v7 oracle; real 10201 fights keep their captured rewards.
+_TUTORIAL_BATTLE_EXP = 20
+_TUTORIAL_BATTLE_SILVER = 1000
+
+
+def _tutorial_battle_remain_list(player: Player, store: Store) -> list[dict] | None:
+    """Pay each scripted tutorial battle once and return its reward rows."""
+    role = player.data.get("RoleData") if isinstance(player.data.get("RoleData"), dict) else {}
+    status = str(role.get("LastStatus") or "")
+    name, _, _tail = status.rpartition("-")
+    if name not in ("stage", "stage2"):
+        return None
+    granted = player.data.get("TutorialBattleRewards")
+    if not isinstance(granted, dict):
+        granted = {}
+        player.data["TutorialBattleRewards"] = granted
+    if granted.get(name):
+        return None
+    role["Exp"] = int(role.get("Exp") or 0) + _TUTORIAL_BATTLE_EXP
+    role["Silver"] = int(role.get("Silver") or 0) + _TUTORIAL_BATTLE_SILVER
+    granted[name] = 1
+    store.save(player)
+    return [{"ItemId": 5, "Num": int(role["Exp"])},
+            {"ItemId": 2, "Num": int(role["Silver"])}]
+
+
 def action_stage_info(payload: dict, player: Player, session: Session, store: Store) -> dict:
     section = _section_record(player)
-    return {
+    result = {
         "SectionRecord": section,
         "PhaseCfg": _phase_cfg(section.get("ChapterId", 1),
                                section.get("SectionId", 1),
@@ -1059,6 +1090,23 @@ def action_stage_info(payload: dict, player: Player, session: Session, store: St
         "MinisterList": [],
         "SectionAward": {},
     }
+    reward = _tutorial_battle_remain_list(player, store)
+    if reward is not None:
+        result["RemainList"] = reward
+    return result
+
+
+def action_stage_result(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_stageMod action10204: the scripted battle's result/confirmation step.
+    Start from the full-state fallback (the client reads Artillery* fields
+    from it) and attach the one-time tutorial reward when this status is a
+    scripted stage that has not been paid yet.
+    """
+    result = action_full_state(payload, player, session, store)
+    reward = _tutorial_battle_remain_list(player, store)
+    if reward is not None:
+        result["RemainList"] = reward
+    return result
 
 
 def action_stage_fight(payload: dict, player: Player, session: Session, store: Store) -> dict:
@@ -5236,6 +5284,7 @@ HANDLERS = {
     "10011": action_rename,
     "10015": action_task,
     "10202": action_stage_info,
+    "10204": action_stage_result,
     "10201": action_stage_fight,
     "10001": action_manage_assets,
     "10002": action_recover,

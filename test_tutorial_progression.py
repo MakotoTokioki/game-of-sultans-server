@@ -220,7 +220,45 @@ def test_levy_advances_only_matching_task_type() -> None:
           taskmod.get_task_num(p.data) == 0, p.data["mainTaskProgress"])
 
 
+def test_scripted_tutorial_battle_rewards() -> None:
+    """User-directed: scripted 10202/10204 stages show 20 EXP / 1000 Silver,
+    paid once per stage (official v7 has no reward on these actions)."""
+    p = make_player("tutorialbattle")
+    store = MemStore()
+    p.data["RoleData"]["LastStatus"] = "stage-1"
+    before_exp = int(p.data["RoleData"]["Exp"])
+    before_silver = int(p.data["RoleData"]["Silver"])
+    d = handlers.action_stage_info({}, p, None, store)
+    rl = d.get("RemainList") or []
+    check("stage battle returns EXP and Silver rows",
+          [r["ItemId"] for r in rl] == [5, 2], rl)
+    check("stage battle grants 20 EXP / 1000 Silver",
+          int(p.data["RoleData"]["Exp"]) == before_exp + 20
+          and int(p.data["RoleData"]["Silver"]) == before_silver + 1000,
+          (rl, p.data["RoleData"]["Exp"], p.data["RoleData"]["Silver"]))
+    check("stage battle response is absolute post-grant totals",
+          rl[0]["Num"] == before_exp + 20 and rl[1]["Num"] == before_silver + 1000, rl)
+    # same status again (10204) must not pay twice
+    d2 = handlers.action_stage_result({}, p, None, store)
+    check("scripted stage pays only once (10204 no double grant)",
+          "RemainList" not in d2
+          and int(p.data["RoleData"]["Silver"]) == before_silver + 1000, d2)
+
+    p2 = make_player("tutorialbattle2")
+    p2.data["RoleData"]["LastStatus"] = "stage2-1"
+    d = handlers.action_stage_info({}, p2, None, MemStore())
+    check("stage2 battle also grants 20 EXP / 1000 Silver",
+          [r["ItemId"] for r in d.get("RemainList", [])] == [5, 2]
+          and int(p2.data["RoleData"]["Silver"]) == 501000, d)
+
+    p3 = make_player("tutorialbattle3")
+    p3.data["RoleData"]["LastStatus"] = "collectGuide-1"
+    check("non-scripted status gets no tutorial reward",
+          "RemainList" not in handlers.action_stage_info({}, p3, None, MemStore()))
+
+
 def main() -> None:
+    test_scripted_tutorial_battle_rewards()
     test_levy_advances_only_matching_task_type()
     test_login_syncs_main_task()
     test_guide_status_does_not_bump_stage_task()
