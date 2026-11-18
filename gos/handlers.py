@@ -646,11 +646,42 @@ def action_task(payload: dict, player: Player, session: Session, store: Store) -
 # values are invented (this is the very map the dev server already sends for
 # 11901 and that the v7 capture shows on every action).
 def _client_red_point() -> dict[str, int]:
-    return {
+    """Numeric red-point map for both v7 and v2 clients.
+
+    The v2 client (redPointMod.lua) reads keys such as ``competitionRank``,
+    ``ranking``, ``arena``, ``school`` … which are absent from the v7 capture
+    map.  myWidget's tab selectIndex path does ``0 < redPoint[key]``; a missing
+    key is nil and aborts showOverlay -> the rankings screen crashes with
+    "attempt to compare number with nil".  Every key the v2 client can look up
+    must therefore be present as a real number.  Zero means "no red dot" for
+    activities this dev server does not run; v7 keys keep their captured 1.
+    """
+    point = {
         "HaloCounsellorRankChange": 1, "SpiritPetRankChange": 1,
         "SpiritPetStage": 1, "FbFansFeedback": 1, "SpecialDiscount": 1,
         "boss": 1, "dailyTask": 1, "achievement": 1,
     }
+    v2_keys = (
+        "vip", "arena", "school", "marry", "visit", "accountBinding",
+        "recharge", "lifanyuan", "uni", "boa", "lam", "Hor", "friendReq",
+        "friendAdded", "TimeLimitSynthesis", "Val", "Inf",
+        "customerResponse", "DinnerSelf", "CrossWarPersonalDamageRank",
+        "CrossWarAllianceScoreRank", "CrossWarGateAwardRank",
+        "MarketingLuckyDraw", "MarketingLogin", "MarketingGroupBuy",
+        "CrossWarAchievementSingle", "CrossWarAchievementAlliance",
+        "CrossWarFeastHasReward", "CrossWarCheerAward", "Ram", "Gro",
+        "PlayerComebackHasRecallAward", "competitionRank", "timeLimit",
+        "MinisterExchange2", "MinisterExchange3", "CrossCompetitionRank",
+        "CrossCompetitionRankDetail", "ranking", "card", "alliance",
+        "cityAward", "exp", "harem", "home", "item", "like", "mail",
+        "marketing", "minister", "ramadanAchievement", "ramadanMarket",
+        "ramadanRank", "recall", "sea", "seakingAchievement", "seakingRank",
+        "seakingStorage", "sevenLogin", "shop", "sign", "updatePrize",
+        "vedio",
+    )
+    for key in v2_keys:
+        point.setdefault(key, 0)
+    return point
 
 
 def attach_task_progress(data: dict, player: Player) -> dict:

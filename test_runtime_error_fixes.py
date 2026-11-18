@@ -75,12 +75,12 @@ def test_every_action_response_carries_red_point() -> None:
         rp = wire.get("RedPoint")
         check("%s action response has RedPoint dict" % action,
               isinstance(rp, dict), (action, rp))
-        check("%s RedPoint has all 8 original keys" % action,
-              isinstance(rp, dict) and set(rp) == RED_POINT_KEYS,
+        check("%s RedPoint retains the 8 captured v7 keys" % action,
+              isinstance(rp, dict) and RED_POINT_KEYS <= set(rp),
               (action, None if rp is None else sorted(rp)))
         check("%s RedPoint values are Lua-safe numbers (no nil)" % action,
               isinstance(rp, dict)
-              and all(isinstance(v, int) and v == 1 for v in rp.values()),
+              and all(isinstance(v, int) for v in rp.values()),
               (action, rp))
 
 
@@ -92,7 +92,7 @@ def test_red_point_survives_early_return_path() -> None:
     wire = handlers.attach_task_progress({}, player)
     rp = wire.get("RedPoint")
     check("early-return path still carries RedPoint with numeric values",
-          isinstance(rp, dict) and set(rp) == RED_POINT_KEYS
+          isinstance(rp, dict) and RED_POINT_KEYS <= set(rp)
           and all(isinstance(v, int) for v in rp.values()), rp)
 
 

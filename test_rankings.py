@@ -197,7 +197,31 @@ def test_rank_other_actions_safe_shapes() -> None:
             {}, requester, session, store), dict))
 
 
+def test_v2_red_point_keys_are_numeric() -> None:
+    """v2 redPointMod / myWidget tab selectIndex does `0 < redPoint[key]`.
+
+    A key missing from the map is nil and aborts the rankings showOverlay with
+    "attempt to compare number with nil".  The v2 client uses its own key set
+    (competitionRank, ranking, arena, ...) distinct from the v7 capture keys.
+    """
+    rp = handlers._client_red_point()
+    for key in ("competitionRank", "ranking", "arena", "school", "vip",
+                "boss", "dailyTask", "achievement"):
+        check(f"red point {key!r} is numeric",
+              isinstance(rp.get(key), int), rp.get(key))
+    check("all red point values are numbers",
+          all(isinstance(v, int) for v in rp.values()), rp)
+    requester, _rival, store, _session = _fixture()
+    d = handlers.attach_task_progress(
+        handlers.action_rank_info({}, requester, None, store), requester)
+    check("rank response carries the full numeric red point map",
+          isinstance(d.get("RedPoint"), dict)
+          and all(isinstance(v, int) for v in d["RedPoint"].values()),
+          d.get("RedPoint"))
+
+
 def main() -> None:
+    test_v2_red_point_keys_are_numeric()
     test_rank_info_lists_and_self()
     test_rank_info_row_fields()
     test_rank_top1()
