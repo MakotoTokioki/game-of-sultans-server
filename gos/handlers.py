@@ -663,7 +663,11 @@ def _client_red_point() -> dict[str, int]:
     }
     v2_keys = (
         "vip", "arena", "school", "marry", "visit", "accountBinding",
-        "recharge", "lifanyuan", "uni", "boa", "lam", "Hor", "friendReq",
+        # "uni" is deliberately absent: v2 redPointMod's updateRedPoint does
+        # string.find(key, ":") + 1 for any "uni*" key (official keys are
+        # "uni:<allianceId>"). A bare "uni" makes that nil+1 and crashes the
+        # main scene before it can render.
+        "recharge", "lifanyuan", "boa", "lam", "Hor", "friendReq",
         "friendAdded", "TimeLimitSynthesis", "Val", "Inf",
         "customerResponse", "DinnerSelf", "CrossWarPersonalDamageRank",
         "CrossWarAllianceScoreRank", "CrossWarGateAwardRank",

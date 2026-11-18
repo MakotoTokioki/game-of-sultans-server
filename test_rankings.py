@@ -211,6 +211,12 @@ def test_v2_red_point_keys_are_numeric() -> None:
               isinstance(rp.get(key), int), rp.get(key))
     check("all red point values are numbers",
           all(isinstance(v, int) for v in rp.values()), rp)
+    # redPointMod.updateRedPoint does string.find(key, ":") + 1 on any "uni*"
+    # key; official keys are "uni:<allianceId>". A bare "uni" crashes the main
+    # scene with "attempt to perform arithmetic on a nil value".
+    check("no bare 'uni' red-point key (client expects 'uni:<id>')",
+          not any(k.startswith("uni") for k in rp),
+          [k for k in rp if k.startswith("uni")])
     requester, _rival, store, _session = _fixture()
     d = handlers.attach_task_progress(
         handlers.action_rank_info({}, requester, None, store), requester)
