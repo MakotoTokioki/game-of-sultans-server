@@ -62,6 +62,33 @@ def main():
     res = handlers.action_item_use({"ItemId": 205, "UseNum": 1}, p, session, store)
     check("book without UseId is refused", "_fail" in res, res)
 
+    # Item 221 (Type1=3, Type2=1006) is a "Book XP Pack": _itemMod.lua maps
+    # 1006 -> AptitudeExp and writes the absolute new value from RemainList.
+    p = _player()
+    handlers._role_item_add(p, 221, 2)
+    cfg = v2configs.item_by_id(221)
+    add = int(cfg.get("AddNum") or 0)
+    target = next(c for c in p.data["RoleCounsellor"] if c["CounsellorId"] == 2)
+    res = handlers.action_item_use({"ItemId": 221, "UseNum": 2, "UseId": 2},
+                                   p, session, store)
+    check("221: no failure", "_fail" not in res, res.get("_fail"))
+    remain = res.get("RemainList", [])
+    check("221: consumed item is first", remain and remain[0]["ItemId"] == 221, remain[:2])
+    xp_rows = [e for e in remain if int(e.get("ItemId") or 0) == 1006]
+    check("221: one AptitudeExp pseudo-item for counsellor 2",
+          len(xp_rows) == 1 and xp_rows[0].get("CounsellorId") == 2, xp_rows)
+    check("221: Num is the absolute AptitudeExp value",
+          xp_rows and int(xp_rows[0]["Num"]) == add * 2, (xp_rows, add))
+    check("221: AptitudeExp persisted on the target counsellor",
+          int(target.get("AptitudeExp") or 0) == add * 2, target.get("AptitudeExp"))
+    check("221: bag count dropped by two",
+          handlers._role_item_count(p, 221) == 0, handlers._role_item_count(p, 221))
+    p = _player()
+    handlers._role_item_add(p, 221, 1)
+    check("221 without UseId is refused",
+          "_fail" in handlers.action_item_use({"ItemId": 221, "UseNum": 1},
+                                               p, session, store))
+
     print(f"\n{sum(ok)}/{len(ok)} checks passed")
     sys.exit(0 if all(ok) else 1)
 

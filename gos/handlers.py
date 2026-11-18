@@ -1368,6 +1368,37 @@ def action_items(payload: dict, player: Player, session: Session, store: Store) 
     return action_full_state(payload, player, session, store)
 
 
+def action_alliance_info(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_allianceMod 11601/11603: the callbacks' first unguarded reads are
+    AllianceData.QuitTime / .AllianceId (modules/_allianceMod.lua 4347-4348,
+    3989-3990).  Our previous missing handler fell through to action_full_state,
+    which has no AllianceData, so entering the Alliance page crashed with
+    "attempt to index field 'AllianceData' (a nil value)".  This dev server has
+    no alliance system, so return a neutral no-alliance envelope.  Date-like
+    fields are OMITTED (nil is nil-safe in the client; a non-nil value would be
+    parsed by dateToSec); AllianceWarUTC is 0 because isAllianceWarFire does
+    `now - AllianceWarUTC` unguarded.
+    """
+    base = player.data.get("RoleBase") if isinstance(player.data.get("RoleBase"), dict) else {}
+    guid = base.get("AllianceGuid") or player.data.get("AllianceGuid") or ""
+    guid = str(guid) if isinstance(guid, str) else ""
+    return {
+        "AllianceData": {
+            "AllianceId": 0, "AllianceGuid": guid, "AllianceName": "",
+            "AllianceLv": 0, "AllianceLeader": "", "AlliancePower": 0,
+            "FaceBook": "", "AllianceExp": 0, "AllianceFortune": 0,
+            "AllianceMemberNum": 0, "Position": 0,
+            "ContributionType": 0, "ContributionTime": 0,
+            "ContributionNum": 0, "ContributionTop": 0,
+            "InsideNotice": "", "OutsideNotice": "", "QQGroup": "",
+            "WeChatNum": "", "IsOpenBoss": 0, "NeedCheck": 0,
+            "ResetPassword": 0, "FlagId": 0,
+        },
+        "AllianceWarOpen": 0, "AllianceWarUTC": 0, "NewWar": 0,
+        "LastDamageRole": 0, "RefusedList": [], "TradeInfo": [],
+    }
+
+
 def action_item_jump(payload: dict, player: Player, session: Session, store: Store) -> dict:
     """_itemMod.action10307: the callback replaces its jump table with
     response["JumpConfMap"] verbatim (_itemMod.lua 2032-2041).  A missing key
@@ -1485,6 +1516,29 @@ def action_item_use(payload: dict, player: Player, session: Session, store: Stor
             pill_add.append(0)
         pill_add[book_pill_type - 1] = book_pill_num
         book_target["PillAdd"] = pill_add
+    elif type1 == 3 and type2 in (1006, 1007):
+        # "Book XP Pack" (221) / "Skill XP Pack" (222).  _itemMod.lua lines
+        # 10-26 map 1006 -> AptitudeExp, 1007 -> SkillExp, and
+        # setCurrRewardData (477-610) writes the response RemainList's
+        # absolute value back with setMinisterInfo(CounsellorId, field, Num).
+        # Same wire shape as the verified 1005 pill path.
+        try:
+            use_id = int(payload.get("UseId") or 0)
+        except (TypeError, ValueError):
+            use_id = 0
+        if not use_id:
+            return {"_fail": "xp pack needs a target counsellor"}
+        book_target = next(
+            (c for c in (player.data.get("RoleCounsellor") or [])
+             if isinstance(c, dict) and int(c.get("CounsellorId") or 0) == use_id),
+            None,
+        )
+        if book_target is None:
+            return {"_fail": f"unknown counsellor {use_id}"}
+        field = "AptitudeExp" if type2 == 1006 else "SkillExp"
+        book_pill_id = type2
+        book_pill_num = int(book_target.get(field) or 0) + add_num * use_num
+        book_target[field] = book_pill_num
     else:
         return {"_fail": f"item {item_id} effect not supported by this server"}
 
@@ -4138,6 +4192,8 @@ HANDLERS = {
     "10305": action_items,
     "10306": action_items,
     "10307": action_item_jump,
+    "11601": action_alliance_info,
+    "11603": action_alliance_info,
     "10308": action_items,
     "10309": action_items,
     "10391": action_items,
