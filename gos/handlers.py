@@ -550,6 +550,9 @@ def action_login(payload: dict, player: Player, session: Session, store: Store) 
     # them from defaults.default_player).
     defaults.heal_cosmetics(player.data, now)
     _heal_counsellor_unlocks(player)
+    # Accounts that reached the tutorial level-up before this fix kept an
+    # empty RoleBeauty; seed Canfeza so the Harem unlocks on next login.
+    _grant_tutorial_beauty(player, int(player.data.get("RoleData", {}).get("Lv") or 1))
     store.save(player)
     return player.data
 
@@ -570,6 +573,56 @@ def action_create_role(payload: dict, player: Player, session: Session, store: S
 
 def action_role_info(payload: dict, player: Player, session: Session, store: Store) -> dict:
     return player.data
+
+
+def _beauty_row(beauty_id: int) -> dict:
+    """Full RoleBeauty row, mirroring _wivesMod.init_wives_info (the client
+    replaces its config-seeded row wholesale with ours, so every field it
+    reads must be present).  Values come from the original TcBeauty /
+    TcBeautySkills configs; no cosmetic or charm amount is invented.
+    """
+    cfg = {}
+    for row in v2configs.load("TcBeauty"):
+        if isinstance(row, dict) and int(row.get("BeautyId") or 0) == int(beauty_id):
+            cfg = row
+            break
+    skills = [[int(s), 0, 0] for s in (cfg.get("Skills") or [])
+              if str(s).isdigit()]
+    skin = {"SkinId": int(beauty_id), "SkinLv": 0}
+    return {
+        "BeautyId": int(beauty_id),
+        "Intimacy": 0,
+        "Charm": int(cfg.get("InitCharm") or 0),
+        "Position": int(cfg.get("Position") or 0),
+        "BeautyExp": 0,
+        "ChildrenNum": 0,
+        "Favor": 0,
+        "IsUnlock": 1,
+        "DressSkin": dict(skin),
+        "HaveSkinId": [dict(skin)],
+        "Skills": skills,
+    }
+
+
+def _grant_tutorial_beauty(player: Player, level: int) -> list[dict]:
+    """Canfeza (Beauty_001) joins the harem at the tutorial's level-2 upgrade.
+
+    roleMod.action10010 (modules/roleMod.lua 1013-1028) unlocks wives from the
+    response's NewBeautyList; our old handler returned an empty list, so the
+    client showed her from story data but RoleBeauty on the server stayed
+    empty and the Harem never unlocked.
+    """
+    if level < 2:
+        return []
+    wives = player.data.setdefault("RoleBeauty", {})
+    if not isinstance(wives, dict):
+        wives = {}
+        player.data["RoleBeauty"] = wives
+    if isinstance(wives.get("1"), dict) and int(wives["1"].get("IsUnlock") or 0) == 1:
+        return []
+    row = _beauty_row(1)
+    wives["1"] = row
+    return [row]
 
 
 def action_level_up(payload: dict, player: Player, session: Session, store: Store) -> dict:
@@ -606,8 +659,9 @@ def action_level_up(payload: dict, player: Player, session: Session, store: Stor
     # Government config values (affair EXP/rate/capacity) are level-indexed;
     # refresh the persisted slice so this level-up takes effect immediately.
     _gov_state(player)
+    new_beauties = _grant_tutorial_beauty(player, level)
     store.save(player)
-    return {"NewLevel": level, "GovOverTime": 0, "NewBeautyList": {}}
+    return {"NewLevel": level, "GovOverTime": 0, "NewBeautyList": new_beauties}
 
 
 def action_task(payload: dict, player: Player, session: Session, store: Store) -> dict:

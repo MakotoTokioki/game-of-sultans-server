@@ -290,7 +290,38 @@ def test_levy_quest_counts_lifetime_levies() -> None:
           taskmod.get_task_num(p.data) == 3, p.data["mainTaskProgress"])
 
 
+def test_tutorial_level_up_grants_canfeza() -> None:
+    """roleMod.action10010 unlocks wives from response.NewBeautyList
+    (modules/roleMod.lua 1013-1028).  Beauty_001_Name = Canfeza."""
+    p = make_player("canfeza")
+    p.data["RoleData"]["Exp"] = 200  # TcLvUpgradeCfg level 2
+    store = MemStore()
+    d = handlers.action_level_up({}, p, None, store)
+    check("level-up returns NewBeautyList with Canfeza",
+          d.get("NewLevel") == 2 and len(d.get("NewBeautyList") or []) == 1
+          and d["NewBeautyList"][0]["BeautyId"] == 1, d)
+    row = d["NewBeautyList"][0]
+    check("Canfeza row has every field the wife UI reads",
+          row.get("IsUnlock") == 1 and row.get("Charm") == 40
+          and row.get("Position") == 1 and isinstance(row.get("Skills"), list)
+          and isinstance(row.get("DressSkin"), dict), row)
+    check("Canfeza persisted in RoleBeauty",
+          int(p.data["RoleBeauty"]["1"]["IsUnlock"]) == 1, p.data["RoleBeauty"])
+    # no duplicate grant on a later level-up
+    p.data["RoleData"]["Exp"] = 400
+    d2 = handlers.action_level_up({}, p, None, store)
+    check("Canfeza granted only once",
+          d2.get("NewBeautyList") == [], d2)
+    # legacy level-2 account heals at login
+    p2 = make_player("canfeza_legacy")
+    p2.data["RoleData"]["Lv"] = 2
+    handlers.action_login({}, p2, None, store)
+    check("login heals legacy account with empty RoleBeauty",
+          int(p2.data["RoleBeauty"]["1"]["IsUnlock"]) == 1, p2.data["RoleBeauty"])
+
+
 def main() -> None:
+    test_tutorial_level_up_grants_canfeza()
     test_levy_quest_counts_lifetime_levies()
     test_scripted_tutorial_battle_rewards()
     test_levy_advances_only_matching_task_type()
