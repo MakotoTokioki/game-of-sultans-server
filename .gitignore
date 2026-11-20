@@ -8,6 +8,7 @@ venv/
 # Runtime state (player saves, JWT/RC4 sessions, request/action logs)
 data/players/
 data/sessions.json
+data/alliances.json
 logs/
 
 # Local secrets / env files
