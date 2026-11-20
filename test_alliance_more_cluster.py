@@ -127,26 +127,21 @@ def main() -> None:
         for action, fn in sorted(ALLIANCE_MORE_HANDLERS.items()):
             resp = fn(dict(PAYLOADS[action]), p, session, store)
             present = all(f in resp for f in REQUIRED[action])
-            types_ok = (
-                isinstance(resp.get("ApplyMember"), list)
-                and isinstance(resp.get("MemberList"), list)
-                and isinstance(resp.get("recordList"), list)
-                and isinstance(resp.get("TaskDetail"), list)
-                and isinstance(resp.get("TradeJoinData"), list)
-                and isinstance(resp.get("ExchangeItems"), dict)
-                and isinstance(resp.get("TradeCounsellors"), dict)
-                and isinstance(resp.get("TradeData"), dict)
-                and isinstance(resp.get("Awards"), dict)
-                and isinstance(resp.get("CurrentPackStatus"), dict)
-                and isinstance(resp.get("AddPackCfg"), list)
-                and isinstance(resp.get("RemainListCfg"), list)
-                and isinstance(resp.get("CashPackCfg"), dict)
-                and isinstance(resp.get("AlliancePackCfg"), dict)
-                and isinstance(resp.get("CurrentPurchasedNum"), dict)
-            )
+            expected_shapes = {
+                "ApplyMember": list, "MemberList": list, "recordList": list,
+                "TaskDetail": list, "TradeJoinData": list, "AllianceTaskInfo": list,
+                "AddPackCfg": list, "RemainListCfg": list,
+                "ExchangeItems": dict, "TradeCounsellors": dict, "TradeData": dict,
+                "Awards": dict, "TradeLevels": (list, dict),
+                "CurrentPackStatus": dict, "CashPackCfg": dict, "AlliancePackCfg": dict,
+                "CurrentPurchasedNum": (dict, int),  # 11647 count / 11648 map
+            }
+            bad = {k: type(resp[k]).__name__
+                   for k, want in expected_shapes.items()
+                   if k in resp and not isinstance(resp[k], want)}
             check(f"{action} response has all callback fields", present,
                   (action, sorted(resp), REQUIRED[action]))
-            check(f"{action} list/map shapes are Lua-safe", types_ok, resp)
+            check(f"{action} list/map shapes are Lua-safe", not bad, bad)
 
         # ---- no-alliance safety: same shapes, no crash, no bare {} ----
         lone = _player("lonely")
