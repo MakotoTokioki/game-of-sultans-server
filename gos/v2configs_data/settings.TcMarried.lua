@@ -1,0 +1,36 @@
+local L0_1, L1_1, L2_1, L3_1, L4_1, L5_1
+L0_1 = {}
+L1_1 = {}
+L1_1.ChildrenDialog = "Married_001_ChildrenDialog"
+L1_1.IsMarried = 0
+L1_1.Id = 1
+L1_1.IsMyChild = 1
+L1_1.ServantDialog = "Married_001_ServantDialog"
+L2_1 = {}
+L2_1.ChildrenDialog = "Married_002_ChildrenDialog"
+L2_1.IsMarried = 1
+L2_1.Id = 2
+L2_1.IsMyChild = 1
+L2_1.ServantDialog = "Married_002_ServantDialog"
+L3_1 = {}
+L3_1.ChildrenDialog = "Married_003_ChildrenDialog"
+L3_1.IsMarried = 1
+L3_1.Id = 3
+L3_1.IsMyChild = 0
+L3_1.ServantDialog = "Married_003_ServantDialog"
+L4_1 = {}
+L4_1.Id = 4
+L4_1.ServantDialog = "Married_004_ServantDialog"
+L4_1.ChildrenDialog = "Married_004_ChildrenDialog"
+L4_1.IsMarried = 1
+L5_1 = {}
+L5_1.Id = 5
+L5_1.ServantDialog = "Married_005_ServantDialog"
+L5_1.ChildrenDialog = "Married_005_ChildrenDialog"
+L5_1.IsMarried = 0
+L0_1[1] = L1_1
+L0_1[2] = L2_1
+L0_1[3] = L3_1
+L0_1[4] = L4_1
+L0_1[5] = L5_1
+return L0_1
