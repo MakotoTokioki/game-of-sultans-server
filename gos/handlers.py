@@ -2119,6 +2119,9 @@ def action_chat(payload: dict, player: Player, session: Session, store: Store) -
         "HaveCashPack": False,
         "IsExistNationsManeuverRedBag": False,
         "ShareRemainSeconds": 0,
+        # action12306 (share) callback does an unguarded `dateToSec(A0_3.Msg.Time)`;
+        # a missing Msg aborts the share flow. Echo a valid game-date timestamp.
+        "Msg": {"Time": _game_date_string(), "Id": 0, "Text": ""},
         "MsgList": sent,
         "NewestMsg": newest,
         "ShieldList": [],
