@@ -2891,12 +2891,28 @@ def action_activity_award_claim(payload: dict, player: Player, session: Session,
 # The post-EndTime claim window is CompetitionRankExpirationSeconds from the
 # client's own ConfigEnvSet (= 86400); no reward/rank data is required by the
 # 11901 path itself.
-_COMPETITION_RANK_SCHEDULE: dict[int, tuple[str, str]] = {
-    1: ("2026-11-16 00:00:00", "2026-11-18 21:59:59"),
-    2: ("2026-11-16 00:00:00", "2026-11-18 21:59:59"),
-    3: ("2026-11-16 00:00:00", "2026-11-21 21:59:59"),
+# Ranking Rush activity ids -> (start, end). The user directed "activate all"
+# ranking rushes. ActivityType comes from the original TcRankUpActivityCfg
+# (9 rows, types 1..9): 1 Empire Power, 2 Campaign, 3 Arena, 4 Union XP,
+# 5 Intimacy, 6 Expended Soldiers, 7 Gold Consumption, 8 Arena Madness,
+# 9 Consort XP. Windows use the original capture's 3-day pattern, widened to a
+# long active range so every rush is available on the single-machine server.
+_RANK_RUSH_TYPES: dict[int, int] = {
+    1: 1,   # Empire Power
+    2: 2,   # Campaign
+    3: 3,   # Arena
+    4: 4,   # Union XP
+    5: 5,   # Intimacy
+    6: 6,   # Expended Soldiers
+    7: 7,   # Gold Consumption
+    8: 8,   # Arena Madness
+    9: 9,   # Consort XP
 }
-_COMPETITION_RANK_ACTIVITY_TYPE: dict[int, int] = {1: 1, 2: 2, 3: 13}
+_RANK_RUSH_WINDOW = ("2026-01-01 00:00:00", "2030-01-01 00:00:00")
+_COMPETITION_RANK_SCHEDULE: dict[int, tuple[str, str]] = {
+    i: _RANK_RUSH_WINDOW for i in _RANK_RUSH_TYPES
+}
+_COMPETITION_RANK_ACTIVITY_TYPE: dict[int, int] = dict(_RANK_RUSH_TYPES)
 
 # The official 11901 TimeLimitCfg body is truncated in every v7 capture (the
 # log prints only the bare "TimeLimitCfg" name nine times, once per requested
@@ -2996,6 +3012,14 @@ def action_11901(payload: dict, player: Player, session: Session, store: Store) 
             for i in dict.fromkeys(tl_ids)
         }
     if not ids and not tl_ids:
+        # Still populate the Ranking Rush list so the screen never renders an
+        # empty scroll list (client bug on empty rank data).
+        envelope["CompetitionRank"] = [
+            {"Id": a, "ActivityType": t, "StartTime": _RANK_RUSH_WINDOW[0],
+             "EndTime": _RANK_RUSH_WINDOW[1]}
+            for a, t in _RANK_RUSH_TYPES.items()
+        ]
+        envelope["CompetitionRankReceive"] = {}
         return envelope
     # saveRouteSetting indexes response["CompetitionRankCfg"][tostring(Id)] for
     # every requested id, so the table must exist even when all ids are
@@ -3013,6 +3037,21 @@ def action_11901(payload: dict, player: Player, session: Session, store: Store) 
             "EndTime": schedule[1],
         }
     envelope["CompetitionRankCfg"] = cfgs
+    # updataRankUpActivity (the CompetitionRank listener) reads a LIST at
+    # A0_2.CompetitionRank whose rows carry Id/ActivityType/StartTime/EndTime,
+    # and A0_2.CompetitionRankReceive. Emitting all original TcRankUpActivityCfg
+    # types as active rows is what actually populates the Ranking Rush screen.
+    rank_rows = [
+        {
+            "Id": aid,
+            "ActivityType": _COMPETITION_RANK_ACTIVITY_TYPE[aid],
+            "StartTime": _RANK_RUSH_WINDOW[0],
+            "EndTime": _RANK_RUSH_WINDOW[1],
+        }
+        for aid in _RANK_RUSH_TYPES
+    ]
+    envelope["CompetitionRank"] = rank_rows
+    envelope["CompetitionRankReceive"] = {}
     return envelope
 
 
