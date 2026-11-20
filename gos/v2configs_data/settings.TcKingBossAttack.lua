@@ -1,0 +1,35 @@
+local L0_1, L1_1, L2_1, L3_1, L4_1
+L0_1 = {}
+L1_1 = {}
+L1_1.Vitality = 4
+L1_1.Attack = 12
+L1_1.Id = 1
+L1_1.Duration = 0
+L1_1.Score = 12
+L1_1.RankScore = 12
+L2_1 = {}
+L2_1.Vitality = 0
+L2_1.Attack = 45
+L2_1.Id = 2
+L2_1.Duration = 4
+L2_1.Score = 45
+L2_1.RankScore = 45
+L3_1 = {}
+L3_1.Vitality = 0
+L3_1.Attack = 15
+L3_1.Id = 3
+L3_1.Duration = 4
+L3_1.Score = 15
+L3_1.RankScore = 15
+L4_1 = {}
+L4_1.Vitality = 0
+L4_1.Attack = 8
+L4_1.Id = 4
+L4_1.Duration = 4
+L4_1.Score = 8
+L4_1.RankScore = 8
+L0_1[1] = L1_1
+L0_1[2] = L2_1
+L0_1[3] = L3_1
+L0_1[4] = L4_1
+return L0_1

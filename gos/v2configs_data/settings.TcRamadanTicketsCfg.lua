@@ -1,0 +1,31 @@
+local L0_1, L1_1, L2_1, L3_1, L4_1
+L0_1 = {}
+L1_1 = {}
+L1_1.TicketId = 20122
+L1_1.BuyType = 1
+L1_1.BuyLimit = 10
+L1_1.Id = 1
+L1_1.ConsumeNum = 100
+L2_1 = {}
+L2_1.TicketId = 20122
+L2_1.BuyType = -1
+L2_1.BuyLimit = 0
+L2_1.Id = 2
+L2_1.ConsumeNum = 0
+L3_1 = {}
+L3_1.TicketId = 20123
+L3_1.BuyType = 1
+L3_1.BuyLimit = 10
+L3_1.Id = 3
+L3_1.ConsumeNum = 100
+L4_1 = {}
+L4_1.TicketId = 20123
+L4_1.BuyType = -1
+L4_1.BuyLimit = 0
+L4_1.Id = 4
+L4_1.ConsumeNum = 0
+L0_1[1] = L1_1
+L0_1[2] = L2_1
+L0_1[3] = L3_1
+L0_1[4] = L4_1
+return L0_1
