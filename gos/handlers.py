@@ -5659,6 +5659,7 @@ def _merge_cluster_handlers() -> None:
         ("gos.handlers_court", "COURT_HANDLERS"),
         ("gos.handlers_childraise", "CHILDRAISE_HANDLERS"),
         ("gos.handlers_alliance_more", "ALLIANCE_MORE_HANDLERS"),
+        ("gos.handlers_instance_more", "INSTANCE_MORE_HANDLERS"),
     )
     import importlib
     for mod_path, dict_name in clusters:
