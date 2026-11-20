@@ -2400,6 +2400,100 @@ def action_stage_info_v2(payload: dict, player: Player, session: Session, store:
             "SectionAward": {}}
 
 
+def action_stage_data(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_stageMod.action10203 (requestStageData): enter/refresh a battle stage.
+
+    The callback copies A0_3.SectionRecord.{ChapterId,SectionId,PhaseId,
+    BossBlood,Soldiers,PlayAnimation,Artillery*} into tbData.RoleSection,
+    then insertHasBattleMinister(A0_3) reads SectionRecord.Counsellors and
+    SectionRecord.HasUsedOrder.  Same envelope as 10202/10208.
+    """
+    section = player.data.setdefault("RoleSection", {})
+    cid = payload.get("CounsellorId")
+    if cid is not None:
+        try:
+            counsellors = section.setdefault("Counsellors", [])
+            cid = int(cid)
+            if cid not in counsellors:
+                counsellors.append(cid)
+        except (TypeError, ValueError):
+            pass
+    store.save(player)
+    return {"SectionRecord": _section_record(player),
+            "PhaseCfg": _phase_cfg(section.get("ChapterId", 1),
+                                   section.get("SectionId", 1),
+                                   section.get("PhaseId", 1)),
+            "CityAwardGet": [], "MinisterList": [], "SectionAward": {}}
+
+
+def action_country_unlock(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_stageMod.action10205: countries newly unlocked by finishing a chapter.
+
+    The callback increments _tributeMod's unlocked-country counter once when
+    A0_3.UnlockCountry[1] is truthy.  TcCountry.UnlockStage is the chapter
+    stage at which a country opens; return the country config rows whose
+    UnlockStage equals the requested chapter (original config, no invention).
+    """
+    try:
+        chapter = int(payload.get("ChapterId") or 1)
+    except (TypeError, ValueError):
+        chapter = 1
+    rows = []
+    for r in v2configs.load("TcCountry"):
+        if isinstance(r, dict) and int(r.get("UnlockStage") or 0) == chapter:
+            rows.append(r)
+    return {"UnlockCountry": rows}
+
+
+def action_artillery_upgrade(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_stageMod.action10206 (cannon): spend SilverNum to charge artillery.
+
+    The callback writes A0_3.{ArtilleryLv,ArtilleryNowSilver,ArtilleryAddPr}
+    into tbData.RoleSection.CannonData.  ConsumeSilver/Effect come from the
+    original TcArtilleryCfg; ArtilleryNowSilver is the silver charged toward
+    the current level, ArtilleryAddPr the success-rate bonus.
+    """
+    try:
+        silver = int(payload.get("SilverNum") or 0)
+    except (TypeError, ValueError):
+        silver = 0
+    section = player.data.setdefault("RoleSection", {})
+    lv = int(section.get("ArtilleryLv") or 1)
+    rows = sorted((r for r in v2configs.load("TcArtilleryCfg") if isinstance(r, dict)),
+                  key=lambda r: int(r.get("Lv") or 0))
+    row = next((r for r in rows if int(r.get("Lv") or 0) == lv), rows[0] if rows else {})
+    now = int(section.get("ArtilleryNowSilver") or 0) + max(0, silver)
+    consume = int(row.get("ConsumeSilver") or 0)
+    add_pr = float(row.get("Effect") or 0)
+    # advance level while charged silver covers this level's cost
+    while consume > 0 and now >= consume and lv < (rows[-1].get("Lv") if rows else lv):
+        now -= consume
+        lv += 1
+        nxt = next((r for r in rows if int(r.get("Lv") or 0) == lv), None)
+        if not nxt:
+            break
+        consume = int(nxt.get("ConsumeSilver") or 0)
+        add_pr = float(nxt.get("Effect") or 0)
+        row = nxt
+    section["ArtilleryLv"] = lv
+    section["ArtilleryNowSilver"] = now
+    section["ArtilleryAddPr"] = add_pr
+    role = player.data.setdefault("RoleData", {})
+    if silver > 0:
+        role["Silver"] = max(0, int(role.get("Silver") or 0) - silver)
+    store.save(player)
+    return {"ArtilleryLv": lv, "ArtilleryNowSilver": now, "ArtilleryAddPr": add_pr}
+
+
+def action_phase_data(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_stageMod.action10207: phase config + current section for a counsellor."""
+    section = _section_record(player)
+    return {"SectionRecord": section,
+            "PhaseCfg": _phase_cfg(section.get("ChapterId", 1),
+                                   section.get("SectionId", 1),
+                                   section.get("PhaseId", 1))}
+
+
 def action_welf_card(payload: dict, player: Player, session: Session, store: Store) -> dict:
     """_welfCardMod.action11504: L0_1.CardStage = A0_3.CardAward.CardStage
     (then updateCardTime reads tbData.CardEndTime, which comes from login)."""
@@ -5398,6 +5492,10 @@ HANDLERS = {
     "10015": action_task,
     "10202": action_stage_info,
     "10204": action_stage_result,
+    "10203": action_stage_data,
+    "10205": action_country_unlock,
+    "10206": action_artillery_upgrade,
+    "10207": action_phase_data,
     "10201": action_stage_fight,
     "10001": action_manage_assets,
     "10002": action_recover,

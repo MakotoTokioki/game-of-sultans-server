@@ -1,0 +1,35 @@
+local L0_1, L1_1, L2_1, L3_1, L4_1, L5_1, L6_1, L7_1, L8_1
+L0_1 = {}
+L1_1 = {}
+L1_1.PhaseId = 1
+L1_1.Name = "PhaseCfg_001_Name"
+L2_1 = {}
+L2_1.PhaseId = 2
+L2_1.Name = "PhaseCfg_002_Name"
+L3_1 = {}
+L3_1.PhaseId = 3
+L3_1.Name = "PhaseCfg_003_Name"
+L4_1 = {}
+L4_1.PhaseId = 4
+L4_1.Name = "PhaseCfg_004_Name"
+L5_1 = {}
+L5_1.PhaseId = 5
+L5_1.Name = "PhaseCfg_005_Name"
+L6_1 = {}
+L6_1.PhaseId = 6
+L6_1.Name = "PhaseCfg_006_Name"
+L7_1 = {}
+L7_1.PhaseId = 7
+L7_1.Name = "PhaseCfg_007_Name"
+L8_1 = {}
+L8_1.PhaseId = 8
+L8_1.Name = "PhaseCfg_008_Name"
+L0_1[1] = L1_1
+L0_1[2] = L2_1
+L0_1[3] = L3_1
+L0_1[4] = L4_1
+L0_1[5] = L5_1
+L0_1[6] = L6_1
+L0_1[7] = L7_1
+L0_1[8] = L8_1
+return L0_1
