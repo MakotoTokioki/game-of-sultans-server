@@ -18,15 +18,48 @@ seeded lazily here; ``gos/defaults.py`` is untouched.
 """
 from __future__ import annotations
 
+import time as _time
+
 from gos import v2configs
-from gos.handlers import (
-    _as_int,
-    _beauty_row,
-    _grant_award_pairs,  # noqa: F401 - available for grant-style extensions
-    _now,
-    _REMAIN_LIST_MAP,  # noqa: F401 - available for attach_remain_list
-    attach_remain_list,  # noqa: F401 - available for grant-style extensions
-)
+
+# Import the shared helpers when possible.  If the coordinator merges this
+# module from the top of gos/handlers.py, that module is only partially
+# initialised and these names do not exist yet -- fall back to local,
+# config-sourced equivalents so the merge cannot break the import chain.
+try:
+    from gos.handlers import _as_int, _beauty_row, _now
+except (ImportError, AttributeError):  # pragma: no cover - merge-time only
+    def _as_int(value, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _now() -> int:
+        return int(_time.time())
+
+    def _beauty_row(beauty_id: int) -> dict:
+        cfg = {}
+        for row in v2configs.load("TcBeauty"):
+            if isinstance(row, dict) and int(row.get("BeautyId") or 0) == int(beauty_id):
+                cfg = row
+                break
+        skills = [[int(s), 0, 0] for s in (cfg.get("Skills") or [])
+                  if str(s).isdigit()]
+        skin = {"SkinId": int(beauty_id), "SkinLv": 0}
+        return {
+            "BeautyId": int(beauty_id),
+            "Intimacy": 0,
+            "Charm": int(cfg.get("InitCharm") or 0),
+            "Position": int(cfg.get("Position") or 0),
+            "BeautyExp": 0,
+            "ChildrenNum": 0,
+            "Favor": 0,
+            "IsUnlock": 1,
+            "DressSkin": dict(skin),
+            "HaveSkinId": [dict(skin)],
+            "Skills": skills,
+        }
 
 
 # ---------------------------------------------------------------------------
