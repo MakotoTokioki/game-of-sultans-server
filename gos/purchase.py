@@ -30,14 +30,30 @@ def recharge_products() -> list[dict]:
     return [dict(r) for r in v2configs.load("TcRechargeConfig")]
 
 
+# Exact product prices from the in-game Recharge screen (appConfig APPIAPLIST +
+# the community sheet). These are the amounts the client sends in trans_center.
+_PRODUCT_USD = {
+    0.99: 50, 4.99: 250, 9.99: 500, 19.99: 1000,
+    49.99: 2500, 99.99: 5000,
+}
+
+
+def diamonds_for_usd(usd: float) -> int:
+    """Diamonds for a product price, from the in-game Recharge catalogue."""
+    amt = abs(float(usd))
+    if amt in _PRODUCT_USD:
+        return _PRODUCT_USD[amt]
+    # nearest known price for safety
+    return _PRODUCT_USD.get(min(_PRODUCT_USD, key=lambda k: abs(k - amt)), 50)
+
+
 def tier_for_usd(usd: float) -> int:
-    """Map a USD amount to the closest tier (community sheet tiers)."""
-    amount = abs(float(usd))
-    best = 1
-    for tier in sorted(_TIER_DIAMONDS):
-        if amount >= [4.99, 14.99, 19.99, 49.99, 99.99, 199.99, 399.99, 999.99, 1999.99, 4999.99][tier - 1]:
-            best = tier
-    return best
+    """Map a USD amount to the tier whose diamond count matches the product."""
+    d = diamonds_for_usd(usd)
+    for t, count in _TIER_DIAMONDS.items():
+        if count == d:
+            return t
+    return 1
 
 
 def diamonds_for_tier(tier: int) -> int:

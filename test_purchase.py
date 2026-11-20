@@ -22,22 +22,26 @@ def main():
 
     p=Player(uid='buy',data=default_player('buy'),path=Path(tempfile.mkdtemp())/'p.json')
     gold0=p.data['RoleData']['Gold']
-    r=handlers.apply_purchase(p, tier=2, store=store)
-    check('purchase grants 250 diamonds', p.data['RoleData']['Gold']==gold0+250, r)
-    check('purchase returns tier/diamonds', r['tier']==2 and r['diamonds']==250, r)
-    check('purchase sets VIP', p.data['RoleData'].get('VipLv')==1, p.data['RoleData'].get('VipLv'))
+    r=handlers.apply_purchase(p, usd=0.99, store=store)
+    # first purchase doubles: 50 * 2 = 100
+    check('first $0.99 purchase doubles to 100 diamonds',
+          p.data['RoleData']['Gold']==gold0+100 and r['first_purchase_bonus'] is True, r)
+    r2=handlers.apply_purchase(p, usd=0.99, store=store)
+    check('second purchase is 50 diamonds (no bonus)',
+          r2['diamonds']==50 and r2['first_purchase_bonus'] is False, r2)
 
-    # product-based purchase
+    # product-id based purchase (no usd given)
     p2=Player(uid='buy2',data=default_player('buy2'),path=Path(tempfile.mkdtemp())/'p2.json')
     g0=p2.data['RoleData']['Gold']
-    r2=handlers.apply_purchase(p2, product_id=1, store=store)
-    check('product 1 grants 50 diamonds', p2.data['RoleData']['Gold']==g0+50, r2)
+    r3=handlers.apply_purchase(p2, product_id=1, store=store)
+    check('product 1 (month card $4.99) first purchase = 500 doubled',
+          p2.data['RoleData']['Gold']==g0+500, r3)
 
     # ack action is Lua-safe
     p3=Player(uid='buy3',data=default_player('buy3'),path=Path(tempfile.mkdtemp())/'p3.json')
     d=handlers.action_purchase_ack({'productId':2},p3,None,store)
     check('11511 ack returns Code=0', d.get('Code')==0, d)
-    check('11511 ack grants diamonds', p3.data['RoleData']['Gold']>g0-250, p3.data['RoleData']['Gold'])
+    check('11511 ack does NOT double-grant', p3.data['RoleData']['Gold']==default_player('x')['RoleData']['Gold'], p3.data['RoleData']['Gold'])
 
     print(f'\n{sum(ok)}/{len(ok)} checks passed'); assert all(ok)
 if __name__=='__main__': main()

@@ -143,6 +143,31 @@ def handle_jwt_action(body: dict, store: Store) -> dict:
 # /frontend/distribute  (9004 / 9005 / 9006 and other routed calls)
 # --------------------------------------------------------------------------
 def handle_distribute(body: dict, store: Store) -> dict:
+    # Payment order creation (SDK trans_center): the client sends URL-encoded
+    # productId/amount/uid/iapId and expects {"errCode":0,"token":"..."}; it then
+    # calls the native IAP pay(token) and finally 11511. On this private server
+    # we fake a successful order and grant the diamonds directly (no real money).
+    from urllib.parse import parse_qs
+    if body.get("act_id") == "trans_center":
+        raw_data = body.get("data") or ""
+        params = parse_qs(raw_data if isinstance(raw_data, str) else "")
+        def _pv(name, default=""):
+            return (params.get(name) or [default])[0]
+        uid = _pv("uid", "dev")
+        try:
+            amt = float(_pv("amount", "0") or 0)
+        except ValueError:
+            amt = 0.0
+        try:
+            product_id = int(_pv("productId", "0") or 0)
+        except ValueError:
+            product_id = 0
+        player = _player_from_distribute(body, store)
+        apply_purchase(player, usd=amt, product_id=product_id, store=store)
+        # token can be any non-empty string; native pay() in test mode uses it.
+        inner_pay = {"errCode": 0, "token": f"gos-{uid}-{product_id}-{int(amt*100)}"}
+        return {"stat": 1, "data": _json(inner_pay)}
+
     has_actionid = body.get("actionid") is not None or body.get("actionId") is not None
     action = str(body.get("actionid") or body.get("actionId") or "")
     nested: dict = {}
@@ -3016,28 +3041,41 @@ def apply_purchase(player: Player, tier: int = 0, usd: float = 0.0,
     level-up awards come from the original TcVIP config.
     """
     from gos import purchase
-    if tier <= 0:
+    # Prefer the ACTUAL price the client reports (authoritative for the IAP
+    # product). productId alone is ambiguous: TcRechargeConfig ProductId 1 is a
+    # month card ($4.99) while the client's iapId "pay_1" is the $0.99 pack.
+    if usd > 0:
+        tier = purchase.tier_for_usd(usd)
+    elif tier <= 0:
         if product_id:
             prod = next((p for p in purchase.recharge_products()
                          if int(p.get("ProductId") or 0) == int(product_id)), None)
             tier = purchase.tier_for_usd(float(prod.get("Money") or 0)) if prod else 1
-        elif usd > 0:
-            tier = purchase.tier_for_usd(usd)
         else:
             tier = 1
     diamonds = purchase.diamonds_for_tier(tier)
-    amount_usd = {1: 4.99, 2: 14.99, 3: 19.99, 4: 49.99, 5: 99.99,
-                  6: 199.99, 7: 399.99, 8: 999.99, 9: 1999.99, 10: 4999.99}.get(tier, 4.99)
+    # Use the actual price the client reported (authoritative); fall back to
+    # the product price mapped from the tier when only a tier was given.
+    amount_usd = usd if usd > 0 else {
+        1: 0.99, 2: 4.99, 3: 9.99, 4: 19.99, 5: 49.99, 6: 99.99,
+        7: 199.99, 8: 399.99, 9: 999.99, 10: 1999.99,
+    }.get(tier, 0.99)
 
     rd = player.data.setdefault("RoleData", {})
     base = player.data.setdefault("RoleBase", {})
     extra = player.data.setdefault("ExtraData", {})
     before_usd = float(extra.get("RechargeAmountUSD") or 0)
     extra["RechargeAmountUSD"] = before_usd + amount_usd
+    # First purchase doubles the diamonds ("First-purchase guarantees doubled
+    # Diamonds" on the Recharge screen). Track it in persistent player state.
+    first = not bool(extra.get("HasPurchased"))
+    granted = diamonds * 2 if first else diamonds
+    if first:
+        extra["HasPurchased"] = 1
     # diamonds are ItemId 1 -> our top-bar key "Gold" (_REMAIN_LIST_MAP[1])
-    rd["Gold"] = _as_int(rd.get("Gold")) + diamonds
+    rd["Gold"] = _as_int(rd.get("Gold")) + granted
     # RechargeAmount tracks currency spent (original key)
-    extra["RechargeAmount"] = _as_int(extra.get("RechargeAmount")) + diamonds
+    extra["RechargeAmount"] = _as_int(extra.get("RechargeAmount")) + granted
 
     new_vip = purchase.vip_level_for_recharge(extra["RechargeAmountUSD"])
     old_vip = _as_int(rd.get("VipLv") or base.get("VipLv") or 0)
@@ -3056,28 +3094,16 @@ def apply_purchase(player: Player, tier: int = 0, usd: float = 0.0,
         base["VipLv"] = new_vip
     if store is not None:
         store.save(player)
-    return {"tier": tier, "diamonds": diamonds, "usd": amount_usd,
+    return {"tier": tier, "diamonds": granted, "usd": amount_usd,
+            "first_purchase_bonus": first,
             "vip_before": old_vip, "vip_after": new_vip, "awards": granted_awards}
 
 
 def action_purchase_ack(payload: dict, player: Player, session: Session, store: Store) -> dict:
-    """11511 payOnComplete / 90110 order record: acknowledge the order and
-    grant the simulated purchase. The client reads no strict response fields
-    here (it just runs its success callback), so a minimal map is safe."""
-    product = payload.get("productId") or payload.get("ProductId")
-    amount = payload.get("amount") or payload.get("Amount") or 0
-    tier = 0
-    pid = 0
-    try:
-        pid = int(product)
-    except (TypeError, ValueError):
-        pass
-    try:
-        tier = int(payload.get("tier") or 0)
-    except (TypeError, ValueError):
-        pass
-    apply_purchase(player, tier=tier, usd=float(amount) if amount else 0,
-                   product_id=pid, store=store)
+    """11511 payOnComplete / 90110 order record: acknowledge the order.
+    The diamonds were already granted by trans_center (order creation); do NOT
+    grant again here or the purchase would be doubled. The client reads no
+    strict response fields here (it just runs its success callback)."""
     return {"Code": 0, "Data": {}}
 
 
