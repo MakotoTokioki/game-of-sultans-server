@@ -5642,6 +5642,33 @@ HANDLERS = {
 }
 
 
+# --- cluster modules implemented in isolated files (parallel work) ---
+# Each module exports a <NAME>_HANDLERS dict of action-id -> handler. Importing
+# is guarded so a partially-written module never breaks server startup.
+def _merge_cluster_handlers() -> None:
+    clusters = (
+        ("gos.handlers_mail", "MAIL_HANDLERS"),
+        ("gos.handlers_wives", "WIVES_HANDLERS"),
+        ("gos.handlers_store", "STORE_HANDLERS"),
+        ("gos.handlers_children", "CHILDREN_HANDLERS"),
+        ("gos.handlers_welfare", "WELFARE_HANDLERS"),
+        ("gos.handlers_misc", "MISC_HANDLERS"),
+    )
+    import importlib
+    for mod_path, dict_name in clusters:
+        try:
+            mod = importlib.import_module(mod_path)
+            table = getattr(mod, dict_name, {})
+            for aid, fn in table.items():
+                if callable(fn):
+                    HANDLERS[str(aid)] = fn
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"[handlers] cluster {mod_path} not loaded: {exc!r}", flush=True)
+
+
+_merge_cluster_handlers()
+
+
 def dispatch(action: str, payload: dict, player: Player, session: Session, store: Store) -> dict:
     handler = HANDLERS.get(str(action))
     if handler is None:
