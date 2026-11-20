@@ -1,0 +1,35 @@
+local L0_1, L1_1, L2_1, L3_1, L4_1
+L0_1 = {}
+L1_1 = {}
+L1_1.ImgBgId = 1
+L1_1.ActivityType = 1
+L1_1.ActivityId = 1
+L1_1.TitleName = "CrossServiceActivity_001_TitleName"
+L1_1.SubName = "Growth_01"
+L1_1.IconId = 1
+L2_1 = {}
+L2_1.ImgBgId = 3
+L2_1.ActivityType = 1
+L2_1.ActivityId = 2
+L2_1.TitleName = "MultiCrossServiceActivity_Power_NameTag"
+L2_1.SubName = "Growth_01"
+L2_1.IconId = 2
+L3_1 = {}
+L3_1.ImgBgId = 2
+L3_1.ActivityType = 5
+L3_1.ActivityId = 1
+L3_1.TitleName = "CrossServiceActivity_002_TitleName"
+L3_1.SubName = "Growth_02"
+L3_1.IconId = 5
+L4_1 = {}
+L4_1.ImgBgId = 4
+L4_1.ActivityType = 5
+L4_1.ActivityId = 2
+L4_1.TitleName = "MultiCrossServiceActivity_Intimacy_NameTag"
+L4_1.SubName = "Growth_02"
+L4_1.IconId = 6
+L0_1[1] = L1_1
+L0_1[2] = L2_1
+L0_1[3] = L3_1
+L0_1[4] = L4_1
+return L0_1
