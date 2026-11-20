@@ -30,7 +30,6 @@ from .handlers import (
     _as_int,
     _game_date_string,
     _grant_award_pairs,
-    _role_item_add,
     _role_item_consume,
     _role_item_count,
     attach_remain_list,
@@ -166,7 +165,9 @@ def action_alliance_notice_change(payload: dict, player: Player, session: Sessio
     return {
         "HintData": {},                 # Type nil -> client falls through (safe)
         "NoticeChangeFreeTimes": free,
-        "IsNeedPopup": 0,               # UNSOURCED: neutral "no popup"
+        # Lua truthiness matters: the scene shows a confirmation dialog for any
+        # truthy value; `false` selects the accepted/success path (UNSOURCED).
+        "IsNeedPopup": False,
     }
 
 
@@ -201,19 +202,16 @@ def action_alliance_apply_decide(payload: dict, player: Player, session: Session
     applicant from our registry so a re-query stays consistent.
     """
     rid = str(payload.get("ApplyRid") or "")
-    agree = _as_int(payload.get("IsAgree"))
-    _, membership, alliance = _my_alliance(player)
+    _, _, alliance = _my_alliance(player)
     if alliance and rid:
         with _alliance_lock:
             raw = alliance.get("ApplyMember") or []
             alliance["ApplyMember"] = [m for m in raw
                                         if not (isinstance(m, dict)
                                                 and str(m.get("RoleId") or "") == rid)]
-            if agree:
-                alliance.setdefault("Members", {})[rid] = {
-                    "Position": 1, "JoinTime": _game_date_string(),
-                    "Power": 0, "Name": "",
-                }
+            # Never materialise an applicant as a member: on a single-machine
+            # server the applicant is not a real player. Joining is handled by
+            # 11603 (action_alliance_join), which registers THIS player.
         _save_all(player, store)
     return {}
 
