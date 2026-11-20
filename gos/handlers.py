@@ -2917,11 +2917,31 @@ _RANK_RUSH_TYPES: dict[int, int] = {
     8: 8,   # Arena Madness
     9: 9,   # Consort XP
 }
+# Deterministic 4-week rotation (community spreadsheet "ETKİNLİKLERİN SIRALAMASI").
+# The active cycle's ranking rush gets a live 3-day window; the others stay
+# advertised with a closed window so they render as "ended", not "always on".
+from gos import rotation as _rotation  # noqa: E402  (local import avoids cycle)
+
 _RANK_RUSH_WINDOW = ("2026-01-01 00:00:00", "2030-01-01 00:00:00")
-_COMPETITION_RANK_SCHEDULE: dict[int, tuple[str, str]] = {
-    i: _RANK_RUSH_WINDOW for i in _RANK_RUSH_TYPES
-}
 _COMPETITION_RANK_ACTIVITY_TYPE: dict[int, int] = dict(_RANK_RUSH_TYPES)
+
+
+def _rank_rush_schedule() -> dict[int, tuple[str, str]]:
+    """Windows for all 9 rushes from the current rotation cycle."""
+    from gos.rotation import cycle_window, current_cycle
+    start, end = cycle_window()
+    active_type = current_cycle()["ranking_type"]
+    out: dict[int, tuple[str, str]] = {}
+    for rid, rtype in _COMPETITION_RANK_ACTIVITY_TYPE.items():
+        if rtype == active_type:
+            out[rid] = (start, end)
+        else:
+            out[rid] = _RANK_RUSH_WINDOW  # advertised, but not this cycle
+    return out
+
+
+def _competition_rank_schedule() -> dict[int, tuple[str, str]]:
+    return _rank_rush_schedule()
 
 # The official 11901 TimeLimitCfg body is truncated in every v7 capture (the
 # log prints only the bare "TimeLimitCfg" name nine times, once per requested
@@ -3036,7 +3056,7 @@ def action_11901(payload: dict, player: Player, session: Session, store: Store) 
     # unknown ids simply store nil client-side.
     cfgs: dict[str, dict] = {}
     for activity_id in dict.fromkeys(ids):  # de-dup, keep order
-        schedule = _COMPETITION_RANK_SCHEDULE.get(activity_id)
+        schedule = _competition_rank_schedule().get(activity_id)
         if schedule is None:
             continue
         cfgs[str(activity_id)] = {
@@ -3050,12 +3070,13 @@ def action_11901(payload: dict, player: Player, session: Session, store: Store) 
     # A0_2.CompetitionRank whose rows carry Id/ActivityType/StartTime/EndTime,
     # and A0_2.CompetitionRankReceive. Emitting all original TcRankUpActivityCfg
     # types as active rows is what actually populates the Ranking Rush screen.
+    _sched = _competition_rank_schedule()
     rank_rows = [
         {
             "Id": aid,
             "ActivityType": _COMPETITION_RANK_ACTIVITY_TYPE[aid],
-            "StartTime": _RANK_RUSH_WINDOW[0],
-            "EndTime": _RANK_RUSH_WINDOW[1],
+            "StartTime": _sched[aid][0],
+            "EndTime": _sched[aid][1],
         }
         for aid in _RANK_RUSH_TYPES
     ]
