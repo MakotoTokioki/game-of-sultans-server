@@ -2494,6 +2494,53 @@ def action_phase_data(payload: dict, player: Player, session: Session, store: St
                                    section.get("PhaseId", 1))}
 
 
+def action_chat_head(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_chatMod.action10019 (set chat avatar): the callback writes
+    RoleBase.ChatAvatar = A0_3.NewHeadImg.  Reuse the 13303 avatar mapping
+    (F/B/C prefix by type) so head selection stays consistent with appearance.
+    """
+    avatar = payload.get("chatAvatar") or payload.get("ChatAvatar")
+    avatar_type = _as_int(payload.get("chooseType") or payload.get("ChooseType") or 0)
+    base = player.data.setdefault("RoleBase", {})
+    new_head = str(base.get("ChatAvatar") or "F400")
+    if avatar:
+        s = str(avatar)
+        # explicit id (numeric) -> prefix by type; a ready "F400"-style string
+        # is passed through unchanged.
+        if s.isdigit():
+            prefix = "F" if avatar_type in (0, 1) else ("C" if avatar_type == 3 else "B")
+            new_head = f"{prefix}{s}"
+        else:
+            new_head = s
+    for key in ("RoleBase", "RoleData"):
+        sl = player.data.get(key)
+        if isinstance(sl, dict):
+            sl["ChatAvatar"] = new_head
+    store.save(player)
+    return {"NewHeadImg": new_head}
+
+
+def action_tribute_info(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_tributeMod.action12001: the callback pairs() A0_3.Countrys and indexes
+    each row by A0_3.Countrys[i].Country.  Build the rows from the original
+    TcCountry table (each row carries its Id as Country)."""
+    countrys = []
+    for r in v2configs.load("TcCountry"):
+        if not isinstance(r, dict):
+            continue
+        row = dict(r)
+        row["Country"] = int(r.get("Id") or 0)
+        countrys.append(row)
+    return {"Countrys": countrys}
+
+
+def action_notice(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_noticeMod.action12701: callback pairs() over the whole response,
+    skipping the "Announcements" key.  An empty table is Lua-safe (no notices).
+    """
+    return {"Announcements": []}
+
+
 def action_welf_card(payload: dict, player: Player, session: Session, store: Store) -> dict:
     """_welfCardMod.action11504: L0_1.CardStage = A0_3.CardAward.CardStage
     (then updateCardTime reads tbData.CardEndTime, which comes from login)."""
@@ -5518,6 +5565,9 @@ HANDLERS = {
     "10308": action_items,
     "10309": action_items,
     "10391": action_items,
+    "10019": action_chat_head,
+    "12001": action_tribute_info,
+    "12701": action_notice,
     "12301": action_chat_send,
     "12302": action_chat,
     "12303": action_chat,

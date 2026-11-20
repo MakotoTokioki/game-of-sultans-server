@@ -83,6 +83,25 @@ def main() -> None:
     check("10207 has SectionRecord + PhaseCfg",
           "SectionRecord" in d and "PhaseCfg" in d, d)
 
+    # ---- 10019 chat head ----
+    p = _player()
+    d = handlers.action_chat_head({"chatAvatar": "402", "chooseType": 0}, p, session, store)
+    check("10019 echoes NewHeadImg and persists ChatAvatar",
+          d.get("NewHeadImg") == "F402"
+          and p.data["RoleBase"].get("ChatAvatar") == "F402", (d, p.data["RoleBase"].get("ChatAvatar")))
+
+    # ---- 12001 tribute info ----
+    d = handlers.action_tribute_info({}, _player(), session, store)
+    cs = d.get("Countrys")
+    check("12001 Countrys rows carry Country key from TcCountry",
+          isinstance(cs, list) and all("Country" in r for r in cs) and cs,
+          cs[:1] if cs else cs)
+
+    # ---- 12701 notice ----
+    d = handlers.action_notice({}, _player(), session, store)
+    check("12701 notice is Lua-safe map",
+          isinstance(d, dict) and "Announcements" in d, d)
+
     print(f"\n{sum(ok)}/{len(ok)} checks passed")
     assert all(ok)
 
