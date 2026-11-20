@@ -2926,6 +2926,25 @@ _SETTING_CATCH_CFG_NAMES = (
 )
 
 
+def action_rank_up_data(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """_rankUpActivityMod action11906 (netRankUpRankData): the callback does
+    `A0_2(A0_3.RankInfo)` and the scene feeds RankInfo to drawScrollList as a
+    LIST (`#RankInfo` rows, each `RankInfo[i].Position/.Score/...`). The generic
+    action_full_state fallback omitted RankInfo -> client got nil and
+    drawScrollList indexed a nil row (device 2026-11-20, Ranking Rush).
+    The rank sub-dialog reads A0_3.RankList (sets rankData=#RankList), while
+    another callback reads A0_3.RankInfo. Return both as real empty lists
+    (single-machine server has no live ranks).
+    """
+    return {"RankInfo": [], "RankList": []}
+
+
+def action_rank_up_forward(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """11905/11907: callbacks just forward the whole response to their caller;
+    an empty table is Lua-safe."""
+    return {}
+
+
 def action_11901(payload: dict, player: Player, session: Session, store: Store) -> dict:
     requested = payload.get("CompetitionRank")
     ids: list[int] = []
@@ -5589,6 +5608,9 @@ HANDLERS = {
     "11902": action_11902,
     "11903": action_11903,
     "11904": action_11904,
+    "11905": action_rank_up_forward,
+    "11906": action_rank_up_data,
+    "11907": action_rank_up_forward,
     "11201": action_achieve,
     "11202": action_achieve_claim,
     "11101": action_store_items,
