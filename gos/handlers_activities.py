@@ -33,6 +33,10 @@ from gos.handlers import (
     _grant_award_pairs,
     attach_remain_list,
 )
+try:  # full config-seeded wife row when the tribute target is not in RoleBeauty
+    from gos.handlers import _beauty_row as _seed_beauty_row
+except (ImportError, AttributeError):  # pragma: no cover - merge-time only
+    _seed_beauty_row = None
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +121,9 @@ def action_12003(payload: dict, player, session, store) -> dict:
             wife["Charm"] = charm
         else:
             charm = _beauty_init_charm(beauty) + bonus
-            wives[key] = {"BeautyId": beauty, "Charm": charm}
+            wife = _seed_beauty_row(beauty) if _seed_beauty_row is not None else {}
+            wife["Charm"] = charm
+            wives[key] = wife
         store.save(player)
 
     return attach_remain_list(
