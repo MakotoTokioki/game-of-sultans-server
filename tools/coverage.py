@@ -15,19 +15,16 @@ sys.path.insert(0, str(SERVER))
 
 
 def client_actions() -> set[str]:
-    """All action IDs the v2.005 client can send (from the cluster map report)."""
-    p = SERVER.parent / "recon" / "protocol" / "action-cluster-map.md"
-    text = p.read_text()
-    # cluster table rows: | # | 10000-10019 | ... |
-    ids: set[str] = set()
-    for m in re.finditer(r"\|\s*\d+\s*\|\s*(\d{4,5})\s*[–-]\s*(\d{4,5})\s*\|", text):
-        lo, hi = int(m.group(1)), int(m.group(2))
-        for i in range(lo, hi + 1):
-            ids.add(f"{i:05d}")
-    # single-id rows
-    for m in re.finditer(r"\|\s*\d+\s*\|\s*(\d{5})\s*\|", text):
-        ids.add(m.group(1))
-    return ids
+    """All action IDs the v2.005 client can send.
+
+    Use the same static index as the shape harness (actual actionNNNNN = ...
+    definitions across the decompiled tree).  The cluster-map ranges are labels
+    (e.g. 10301-10391 is not 91 contiguous actions) and inflate the count.
+    """
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent / "lua_shape_harness"))
+    from run import build_action_index
+    return set(build_action_index())
 
 
 def main() -> None:
