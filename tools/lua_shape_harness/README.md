@@ -52,6 +52,13 @@ A response with `GainActivityItem` missing entirely reports:
   gets sample responses from our handlers (or a fixture), runs the harness,
   and emits reports.
 
+- `extract_fields.py` — **static** field discovery (no Lua runtime). For each
+  action it walks backward from `actionNNNNN = Lxx` (the decompiler reuses local
+  names, so the target function is defined *before* the assignment), finds the
+  request function and its response callback, and lists every field read from
+  the response parameter. This works even for modules that fail to load in the
+  sandbox. `--all` writes `recon/protocol/static-fields.md` (479 actions).
+
 ## Usage
 
 ```bash

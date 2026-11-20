@@ -129,14 +129,32 @@ env.netProtocol = {
 }
 env.tableUtils = setmetatable({}, {__index = function() return function(...) return {...} end end})
 env.stringUtils = setmetatable({}, {__index = function() return stubfn end})
+local tb_data = {
+  RoleSection = { ChapterId = 1, SectionId = 1, Phase = 1, BossBlood = 0, Soldiers = 0 },
+  RoleData = load_config('RoleData'),
+  RoleBeauty = {}, RoleItem = {}, RoleActivity = 0,
+}
 env.modManager = {
   dataMod = {
     getTcData = load_config,
-    getTbData = function() return load_config('RoleData') end,
+    getTbData = function() return tb_data end,
     getCfg = function(name) return load_config(name) end,
+    getEnvCfg = function(name)
+      local rows = load_config('envset')
+      if type(rows) == 'table' then
+        for _, r in pairs(rows) do
+          if type(r) == 'table' and (r.Key == name or r.name == name) then
+            return r.Value or r.value
+          end
+        end
+      end
+      return 0
+    end,
   },
   roleMod = setmetatable({}, {__index = function() return stubfn end}),
   _wivesMod = setmetatable({}, {__index = function() return stubfn end}),
+  _stageMod = setmetatable({}, {__index = function() return stubfn end}),
+  redPointMod = setmetatable({}, {__index = function() return stubfn end}),
 }
 -- generic Corona / engine stubs
 env.display = setmetatable({}, {__index = function() return function() return setmetatable({}, {__index=function() return stubfn end}) end end})
@@ -178,6 +196,19 @@ if type(req) ~= 'function' then
   print("NO_REQUEST_FUNCTION: action" .. action_id .. " (type=" .. type(req) .. ")")
   os.exit(3)
 end
+local function try_call(fn)
+  local args
+  if request_args then
+    args = {}
+    for i, v in ipairs(request_args) do
+      args[i] = (type(v)=='table') and setmetatable(v, {__index=function() return 0 end}) or v
+    end
+  else
+    args = { setmetatable({}, {__index=function() return 0 end}) }
+  end
+  args[#args+1] = function(...) end
+  pcall(fn, unpack(args))
+end
 
 -- ---- strict nil-read logging ----
 -- NOTE: LuaJIT is Lua 5.1 — pairs()/ipairs() IGNORE __pairs, so we must attach
@@ -218,19 +249,19 @@ local function make_arg(v)
   end
   return v
 end
-if request_args then
-  local call_args = {}
-  for i, v in ipairs(request_args) do call_args[i] = make_arg(v) end
-  call_args[#call_args + 1] = function(...) end
-  reqok, reqerr = pcall(req, unpack(call_args))
-else
-  local dryargs = setmetatable({}, {__index = function() return 0 end})
-  reqok, reqerr = pcall(req, dryargs, function(...) end)
-end
-if not reqok then
-  print("REQUEST_ERROR: " .. tostring(reqerr))
-end
+try_call(req)
 local cb = captured and captured.callback
+if not cb then
+  -- decompiler local-reuse: actionNNNNN may point to the wrong request function;
+  -- try every exported function until one sends our action id.
+  for name, fn in pairs(M) do
+    if type(fn) == 'function' then
+      try_call(fn)
+      cb = captured and captured.callback
+      if cb then break end
+    end
+  end
+end
 
 if not cb then
   print("NO_CALLBACK_CAPTURED for action " .. action_id)
