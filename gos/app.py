@@ -81,7 +81,25 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        from urllib.parse import parse_qs
         path = urlparse(self.path).path
+        if path.rstrip("/") == "/dev/purchase":
+            # Simulated real-money purchase (private server, no payment gateway).
+            # GET /dev/purchase?uid=dev&tier=2   (or &product=1 / &usd=4.99)
+            qs = parse_qs(urlparse(self.path).query)
+            uid = (qs.get("uid") or ["dev"])[0]
+            tier = int((qs.get("tier") or ["0"])[0])
+            product = int((qs.get("product") or ["0"])[0])
+            usd = float((qs.get("usd") or ["0"])[0])
+            try:
+                player = _store.get_or_create(uid, "Sultan")
+                from .handlers import apply_purchase
+                result = apply_purchase(player, tier=tier, usd=usd,
+                                        product_id=product, store=_store)
+                self._send(200, {"ok": True, **result})
+            except Exception as exc:
+                self._send(500, {"ok": False, "error": repr(exc)})
+            return
         if path.rstrip("/") in ("", "/health"):
             self._send(200, {"ok": True, "service": "game-of-sultans-dev-server", "time": int(time.time())})
         elif "/vocal_music/" in path or path.endswith(".mp3"):

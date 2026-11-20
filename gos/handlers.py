@@ -851,6 +851,22 @@ def attach_task_progress(data: dict, player: Player) -> dict:
 # Note: IncrRemainList (v7) does not exist anywhere in the v2 client.
 # Note: the client key is "Fame"; our defaults store lowercase "fame", so
 # ItemId 6 is only emitted when a "Fame" key is actually present.
+def _sheet_time_limit_awards() -> dict[int, list[dict]]:
+    """Community sheet tier tables for activities 1-4 (see sheet_awards.py).
+    Award amounts are real (mapped to original TcItem IDs); RequireNum is the
+    sequential stage index because a single-machine server has no diamond-spend
+    counter — the sheet's spend thresholds (500+) would be unclaimable.
+    """
+    from gos import sheet_awards
+    out: dict[int, list[dict]] = {}
+    for aid, tiers in sheet_awards.activity_awards().items():
+        out[aid] = [
+            {"IsShow": 1, "RequireNum": idx, "Award": row["Award"]}
+            for idx, row in enumerate(tiers, 1)
+        ]
+    return out
+
+
 _REMAIN_LIST_MAP = {
     1: "Gold",
     2: "Silver",
@@ -2990,6 +3006,81 @@ def action_rank_up_forward(payload: dict, player: Player, session: Session, stor
     return {}
 
 
+def apply_purchase(player: Player, tier: int = 0, usd: float = 0.0,
+                   product_id: int = 0, store=None) -> dict:
+    """Grant the items a real-money purchase would deliver (SIMULATED).
+
+    No money is charged and no order is sent anywhere. Called from the dev
+    endpoint /dev/purchase and from the in-game purchase actions (11511/90110).
+    Diamonds come from the community sheet VIP tier table; VIP level and its
+    level-up awards come from the original TcVIP config.
+    """
+    from gos import purchase
+    if tier <= 0:
+        if product_id:
+            prod = next((p for p in purchase.recharge_products()
+                         if int(p.get("ProductId") or 0) == int(product_id)), None)
+            tier = purchase.tier_for_usd(float(prod.get("Money") or 0)) if prod else 1
+        elif usd > 0:
+            tier = purchase.tier_for_usd(usd)
+        else:
+            tier = 1
+    diamonds = purchase.diamonds_for_tier(tier)
+    amount_usd = {1: 4.99, 2: 14.99, 3: 19.99, 4: 49.99, 5: 99.99,
+                  6: 199.99, 7: 399.99, 8: 999.99, 9: 1999.99, 10: 4999.99}.get(tier, 4.99)
+
+    rd = player.data.setdefault("RoleData", {})
+    base = player.data.setdefault("RoleBase", {})
+    extra = player.data.setdefault("ExtraData", {})
+    before_usd = float(extra.get("RechargeAmountUSD") or 0)
+    extra["RechargeAmountUSD"] = before_usd + amount_usd
+    # diamonds are ItemId 1 -> our top-bar key "Gold" (_REMAIN_LIST_MAP[1])
+    rd["Gold"] = _as_int(rd.get("Gold")) + diamonds
+    # RechargeAmount tracks currency spent (original key)
+    extra["RechargeAmount"] = _as_int(extra.get("RechargeAmount")) + diamonds
+
+    new_vip = purchase.vip_level_for_recharge(extra["RechargeAmountUSD"])
+    old_vip = _as_int(rd.get("VipLv") or base.get("VipLv") or 0)
+    granted_awards: list[dict] = []
+    if new_vip > old_vip:
+        for level in range(old_vip + 1, new_vip + 1):
+            for aw in purchase.vip_awards(level):
+                iid, num = aw["ItemId"], aw["Num"]
+                key = _REMAIN_LIST_MAP.get(iid)
+                if key is not None:
+                    rd[key] = _as_int(rd.get(key)) + num
+                else:
+                    _role_item_add(player, iid, num)
+                granted_awards.append(aw)
+        rd["VipLv"] = new_vip
+        base["VipLv"] = new_vip
+    if store is not None:
+        store.save(player)
+    return {"tier": tier, "diamonds": diamonds, "usd": amount_usd,
+            "vip_before": old_vip, "vip_after": new_vip, "awards": granted_awards}
+
+
+def action_purchase_ack(payload: dict, player: Player, session: Session, store: Store) -> dict:
+    """11511 payOnComplete / 90110 order record: acknowledge the order and
+    grant the simulated purchase. The client reads no strict response fields
+    here (it just runs its success callback), so a minimal map is safe."""
+    product = payload.get("productId") or payload.get("ProductId")
+    amount = payload.get("amount") or payload.get("Amount") or 0
+    tier = 0
+    pid = 0
+    try:
+        pid = int(product)
+    except (TypeError, ValueError):
+        pass
+    try:
+        tier = int(payload.get("tier") or 0)
+    except (TypeError, ValueError):
+        pass
+    apply_purchase(player, tier=tier, usd=float(amount) if amount else 0,
+                   product_id=pid, store=store)
+    return {"Code": 0, "Data": {}}
+
+
 def action_11901(payload: dict, player: Player, session: Session, store: Store) -> dict:
     requested = payload.get("CompetitionRank")
     ids: list[int] = []
@@ -3122,6 +3213,10 @@ _TIME_LIMIT_AWARD_CFG: dict[int, list[dict]] = {
         for _stage in range(1, 6)
     ],
 }
+# Activities 1-4: real award amounts from the community sheet tier tables,
+# mapped to original v2 TcItem IDs (flowers/food absent from v2 are skipped).
+# Activities 5-8 keep neutral empty AwardCfg (no v2-compatible source).
+_TIME_LIMIT_AWARD_CFG.update(_sheet_time_limit_awards())
 
 
 def _time_limit_rows(activity_id: int) -> list[dict]:
@@ -5680,6 +5775,8 @@ HANDLERS = {
     "11905": action_rank_up_forward,
     "11906": action_rank_up_data,
     "11907": action_rank_up_forward,
+    "11511": action_purchase_ack,
+    "90110": action_purchase_ack,
     "11201": action_achieve,
     "11202": action_achieve_claim,
     "11101": action_store_items,
