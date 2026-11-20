@@ -78,13 +78,6 @@ def _cfg_rows(name: str) -> list:
     return [r for r in v2configs.load(name) if isinstance(r, dict)]
 
 
-def _cfg_row(name: str, key: str, value) -> dict:
-    for row in _cfg_rows(name):
-        if _as_int(row.get(key)) == _as_int(value):
-            return row
-    return {}
-
-
 def _blood_rows() -> list:
     rows = [r for r in _cfg_rows("TcAllianceWarBloodAddition") if "Stage" in r]
     return sorted(rows, key=lambda r: _as_int(r.get("Stage")))
@@ -331,9 +324,9 @@ def action_11659_shop_buy(payload: dict, player: Player, session: Session,
 def action_11660_shop_exchange(payload: dict, player: Player, session: Session,
                                store: Store) -> dict:
     st = _state(player)
-    exchange_time = _as_int(st.get("ExchangeTime")) + 1
-    st["ExchangeTime"] = exchange_time
-    store.save(player)
+    # No authored exchange limit/stock exists in the v2 configs; echo the
+    # locally tracked count instead of inventing a new one.
+    exchange_time = _as_int(st.get("ExchangeTime"))
     return {"ExchangeTime": exchange_time, "JinnangStore": 0}
 
 
@@ -373,8 +366,9 @@ def action_11663_restore_action(payload: dict, player: Player, session: Session,
     actions = st.setdefault("ActionPoints", {})
     key = str(counsellor_id)
     action_num = _as_int(actions.get(key))
-    restore_type = _as_int(payload.get("RestoreType"))
-    _cfg_row("TcWarActionRestoreCfg", "Type", restore_type)  # authored cost tier
+    # Restore cost tiers are authored in TcWarActionRestoreCfg (Type/Count/
+    # ConsumeNum); the balance itself is server-authoritative, so ActionNum is
+    # echoed from local state and never synthesized from a tier.
     return {"ActionNum": action_num}
 
 
