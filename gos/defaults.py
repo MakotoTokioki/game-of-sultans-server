@@ -285,10 +285,9 @@ def default_player(uid: str, nickname: str = "Sultan") -> dict:
         # with Version 0.  Every other activity key stays absent, which the
         # client treats exactly like the previous empty Activity table.
         "Activity": {
+            # All 9 Ranking Rush types active (user-directed "activate all").
             "CompetitionRank": [
-                {"Id": 1, "Version": 0},
-                {"Id": 2, "Version": 0},
-                {"Id": 3, "Version": 0},
+                {"Id": i, "Version": 0} for i in range(1, 10)
             ],
             # Official 10000 capture (recon/v7-capture/session-20261116-093154.log)
             # advertises TimeLimitActivity ids 1..9 here with Version 0.

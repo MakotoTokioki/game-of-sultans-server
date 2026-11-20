@@ -18,6 +18,11 @@ def main():
     rows=v2configs.load('TcRankUpActivityCfg')
     check('TcRankUpActivityCfg has 9 activity types', len(rows)==9, len(rows))
 
+    # login seeds all 9 ids for fresh accounts
+    act=p.data.get('Activity',{})
+    ids=[e['Id'] for e in act.get('CompetitionRank',[])]
+    check('login seeds all 9 rush ids', ids==list(range(1,10)), ids)
+
     r=handlers.dispatch('11901',{'CompetitionRank':[1,2,3]},p,None,store)
     lst=r.get('CompetitionRank')
     check('11901 CompetitionRank is a list of all 9 rushes', isinstance(lst,list) and len(lst)==9, type(lst).__name__ if lst is not None else None)

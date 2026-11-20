@@ -502,8 +502,17 @@ def action_login(payload: dict, player: Player, session: Session, store: Store) 
     if not isinstance(activity, dict):
         activity = {}
         player.data["Activity"] = activity
-    if not activity.get("CompetitionRank"):
-        activity["CompetitionRank"] = [{"Id": i, "Version": 0} for i in (1, 2, 3)]
+    # Activate all 9 Ranking Rush types (user-directed). The client builds its
+    # 11901 request from these Id/Version entries, so all 9 show. Expand any
+    # legacy account that still has only the first 3.
+    existing_cr = activity.get("CompetitionRank")
+    have = {int(e.get("Id") or 0) for e in existing_cr} if isinstance(existing_cr, list) else set()
+    if not isinstance(existing_cr, list):
+        existing_cr = []
+    for i in _RANK_RUSH_TYPES:
+        if i not in have:
+            existing_cr.append({"Id": i, "Version": 0})
+    activity["CompetitionRank"] = existing_cr
     if not activity.get("TimeLimitActivity"):
         # Same official 1..9 queue (see defaults.py); existing accounts need
         # it too or the 11901 TimeLimitCfg listener never runs.
