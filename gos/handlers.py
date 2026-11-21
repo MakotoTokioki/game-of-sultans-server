@@ -587,6 +587,8 @@ def action_login(payload: dict, player: Player, session: Session, store: Store) 
     # Accounts that reached the tutorial level-up before this fix kept an
     # empty RoleBeauty; seed Canfeza so the Harem unlocks on next login.
     _grant_tutorial_beauty(player, int(player.data.get("RoleData", {}).get("Lv") or 1))
+    # Daily login counts toward the time-limited "Giriş Yap" event (once/day).
+    _bump_time_limit(player, "GirisYap", 1)
     store.save(player)
     return player.data
 
@@ -1446,6 +1448,9 @@ def action_manage_assets(payload: dict, player: Player, session: Session, store:
         levy_key = ("LevySilver", "LevyGrain", "LevySoldiers")[index - 1]
         _bump_achievement(player, levy_key)
         _bump_daily(player, levy_key)
+        # Time-limited events: levies count as resource-gain participation.
+        for tl_key in ("LevySilver", "LevyGrain", "LevySoldiers"):
+            _bump_time_limit(player, tl_key, 1)
     else:
         # CollectType 4 = one-key collect: consume exactly one queued tick
         # from EACH resource (the client's auto-levy button).  Never reset
@@ -1467,6 +1472,7 @@ def action_manage_assets(payload: dict, player: Player, session: Session, store:
         for key in ("LevySilver", "LevyGrain", "LevySoldiers"):
             _bump_achievement(player, key)
             _bump_daily(player, key)
+            _bump_time_limit(player, key, 1)
     role_data["LevyTimeUTC"] = stamps
     # Sultan Boost: 15% chance (ConfigEnvSet) to multiply levy earnings 10x.
     miracle = _miracle_roll() if grants else False
@@ -3244,6 +3250,33 @@ _TIME_LIMIT_AWARD_CFG: dict[int, list[dict]] = {
 # Activities 5-8 keep neutral empty AwardCfg (no v2-compatible source).
 _TIME_LIMIT_AWARD_CFG.update(_sheet_time_limit_awards())
 
+# Activities 5-8 had no v2-compatible source; fill them from the sheet's other
+# task tables so every time-limited event shows rewards (same original data,
+# just a different task column). Activity 9 keeps its captured v7 rewards.
+def _fill_remaining_time_limit_awards() -> None:
+    from gos import sheet_awards
+    for aid in (5, 6, 7, 8):
+        if _TIME_LIMIT_AWARD_CFG.get(aid):
+            continue
+        cycle = ((aid - 5) % 4) + 1  # spread the 4 cycle tables across 5-8
+        tiers = sheet_awards.elmas_harca_table(cycle)
+        _TIME_LIMIT_AWARD_CFG[aid] = [
+            {"IsShow": 1, "RequireNum": idx, "Award": row["Award"]}
+            for idx, row in enumerate(tiers, 1)
+        ]
+
+
+_fill_remaining_time_limit_awards()
+
+# Which time-limited activity each gameplay counter feeds. The official game
+# tracks spend/participation per event; these map the sheet's task names to the
+# 9 activity slots the v2 client requests.
+_TIME_LIMIT_COUNTER_ACTIVITY: dict[str, int] = {
+    "ElmasHarca": 1, "AltinHarca": 2, "PayeKullan": 3, "SamimiyetArtir": 4,
+    "TebdileCik": 5, "EnderunEgit": 6, "DevletIsi": 7, "GirisYap": 8,
+    "LevySilver": 1, "LevyGrain": 2, "LevySoldiers": 3,
+}
+
 
 def _time_limit_rows(activity_id: int) -> list[dict]:
     """AwardCfg rows as a LIST with explicit stage index (sortData defaults
@@ -3315,6 +3348,18 @@ def _time_limit_flags(award_get: dict, activity_id: int, row_count: int) -> list
     if len(flags) < row_count:
         flags += [0] * (row_count - len(flags))
     return flags
+
+
+def _bump_time_limit(player: Player, key: str, num: int = 1) -> None:
+    """Advance a time-limited event counter from real gameplay (mirrors the
+    official server's server-side activity tracking). Counter names match the
+    sheet task keys; each maps to an activity via _TIME_LIMIT_COUNTER_ACTIVITY."""
+    counters = player.data.setdefault("TimeLimitCounters", {})
+    counters[key] = int(counters.get(key) or 0) + max(0, int(num))
+    aid = _TIME_LIMIT_COUNTER_ACTIVITY.get(key)
+    if aid:
+        _award, complete = _time_limit_state(player)
+        complete[str(aid)] = int(complete.get(str(aid)) or 0) + max(0, int(num))
 
 
 def _time_limit_window_open(ts: int | None = None) -> bool:
@@ -4368,6 +4413,8 @@ def action_school_capacity(payload: dict, player: Player, session: Session, stor
     if gold < cost:
         return {"_fail": f"needs {cost} gold"}
     role_data["Gold"] = gold - cost
+    # Gold consumption counts toward time-limited events (sheet "Altın Harca").
+    _bump_time_limit(player, "AltinHarca", cost)
     player.data.setdefault("School", {})["Capacity"] = int(row.get("Capacity") or capacity + 1)
     store.save(player)
     return attach_remain_list({"Capacity": int(row.get("Capacity") or capacity + 1)}, player)
