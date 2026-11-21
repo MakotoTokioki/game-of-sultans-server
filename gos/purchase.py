@@ -71,13 +71,21 @@ def vip_level_for_recharge(total_usd: float) -> int:
 
 
 def vip_awards(level: int) -> list[dict]:
-    """TcVIP[level].AwardItem -> [{ItemId, Num}] (original config)."""
+    """TcVIP[level].AwardItem -> [{ItemId, Num, EntityId?}] (original config).
+
+    A 3rd element (e.g. [1100,1,16]) is the consort/vizier id granted with the
+    VIP level: 1100=Cariye (consort), 1000=Vezir (vizier). Those are entities,
+    not bag items — apply_purchase adds them to RoleBeauty/RoleCounsellor.
+    """
     out: list[dict] = []
     for row in v2configs.load("TcVIP"):
         if int(row.get("Level") or 0) != int(level):
             continue
         for a in row.get("AwardItem") or []:
             if isinstance(a, (list, tuple)) and len(a) >= 2:
-                out.append({"ItemId": int(a[0]), "Num": int(a[1])})
+                entry = {"ItemId": int(a[0]), "Num": int(a[1])}
+                if len(a) >= 3 and str(a[2]).isdigit():
+                    entry["EntityId"] = int(a[2])
+                out.append(entry)
         break
     return out

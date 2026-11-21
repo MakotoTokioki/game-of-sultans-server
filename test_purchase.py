@@ -19,6 +19,10 @@ def main():
     check('VIP level for $5 = 1 (TcVIP threshold)', purchase.vip_level_for_recharge(5)==1)
     check('VIP level for $100 = 4', purchase.vip_level_for_recharge(100)==4)
     check('VIP2 awards from TcVIP', any(a['ItemId']==303 for a in purchase.vip_awards(2)))
+    v2 = purchase.vip_awards(2)
+    check('VIP2 consort id preserved', any(a.get('EntityId')==16 for a in v2), v2)
+    v3 = purchase.vip_awards(3)
+    check('VIP3 vizier id preserved', any(a.get('EntityId')==33 for a in v3), v3)
 
     p=Player(uid='buy',data=default_player('buy'),path=Path(tempfile.mkdtemp())/'p.json')
     gold0=p.data['RoleData']['Gold']
@@ -42,6 +46,14 @@ def main():
     d=handlers.action_purchase_ack({'productId':2},p3,None,store)
     check('11511 ack returns Code=0', d.get('Code')==0, d)
     check('11511 ack does NOT double-grant', p3.data['RoleData']['Gold']==default_player('x')['RoleData']['Gold'], p3.data['RoleData']['Gold'])
+
+    # VIP level-up grants the config's consort/vizier entities
+    pv=Player(uid='vipent',data=default_player('vipent'),path=Path(tempfile.mkdtemp())/'pv.json')
+    handlers.apply_purchase(pv, usd=19.99, store=store)  # VIP2 -> consort 16
+    check('VIP2 grants consort 16', '16' in pv.data['RoleBeauty'], list(pv.data['RoleBeauty'].keys()))
+    handlers.apply_purchase(pv, usd=49.99, store=store)  # VIP3 -> vizier 33
+    check('VIP3 grants vizier 33', 33 in [c['CounsellorId'] for c in pv.data['RoleCounsellor']],
+          [c['CounsellorId'] for c in pv.data['RoleCounsellor']])
 
     print(f'\n{sum(ok)}/{len(ok)} checks passed'); assert all(ok)
 if __name__=='__main__': main()

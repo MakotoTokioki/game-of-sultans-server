@@ -640,6 +640,40 @@ def _beauty_row(beauty_id: int) -> dict:
     }
 
 
+def _grant_beauty(player: Player, beauty_id: int) -> None:
+    """Unlock a consort (Cariye) awarded by a VIP level. Idempotent."""
+    wives = player.data.setdefault("RoleBeauty", {})
+    if not isinstance(wives, dict):
+        wives = {}
+        player.data["RoleBeauty"] = wives
+    key = str(int(beauty_id))
+    if key not in wives:
+        wives[key] = _beauty_row(int(beauty_id))
+
+
+def _grant_counsellor(player: Player, counsellor_id: int) -> None:
+    """Unlock a vizier (Vezir) awarded by a VIP level. Idempotent. Row shape
+    mirrors a fresh RoleCounsellor entry from defaults."""
+    rows = player.data.setdefault("RoleCounsellor", [])
+    if not isinstance(rows, list):
+        rows = []
+        player.data["RoleCounsellor"] = rows
+    cid = int(counsellor_id)
+    if any(int(c.get("CounsellorId") or 0) == cid for c in rows if isinstance(c, dict)):
+        return
+    cfg = next((r for r in v2configs.load("TcCounsellor")
+                if int(r.get("Id") or 0) == cid), {})
+    rows.append({
+        "CounsellorId": cid, "Id": cid,
+        "CounsellorType": int(cfg.get("CounsellorType") or 1),
+        "Lv": 1, "Peerages": 1, "NowSilver": 0,
+        "HaloAdd": [0, 0, 0, 0], "BeautyAdd": [0, 0, 0, 0],
+        "PillAdd": [0, 0, 0, 0], "AttributeValue": [0, 0, 0, 0],
+        "AptitudeExp": 0, "SkillExp": 0, "IsLock": 0,
+        "HaloLv": 0, "SkillLv": 1, "HaloBreakLv": 0,
+    })
+
+
 def _grant_tutorial_beauty(player: Player, level: int) -> list[dict]:
     """Canfeza (Beauty_001) joins the harem at the tutorial's level-2 upgrade.
 
@@ -3090,11 +3124,17 @@ def apply_purchase(player: Player, tier: int = 0, usd: float = 0.0,
         for level in range(old_vip + 1, new_vip + 1):
             for aw in purchase.vip_awards(level):
                 iid, num = aw["ItemId"], aw["Num"]
-                key = _REMAIN_LIST_MAP.get(iid)
-                if key is not None:
-                    rd[key] = _as_int(rd.get(key)) + num
+                entity_id = aw.get("EntityId")
+                if iid == 1000 and entity_id:      # Vezir (vizier) unlock
+                    _grant_counsellor(player, entity_id)
+                elif iid == 1100 and entity_id:    # Cariye (consort) unlock
+                    _grant_beauty(player, entity_id)
                 else:
-                    _role_item_add(player, iid, num)
+                    key = _REMAIN_LIST_MAP.get(iid)
+                    if key is not None:
+                        rd[key] = _as_int(rd.get(key)) + num
+                    else:
+                        _role_item_add(player, iid, num)
                 granted_awards.append(aw)
         rd["VipLv"] = new_vip
         base["VipLv"] = new_vip
