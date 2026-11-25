@@ -1,9 +1,26 @@
 # Game of Sultans dev server
 
-A from-scratch protocol-compatible server for the `com.dc.hwsj` APK in
-`../build.apk`. It is intentionally a development harness: it speaks the real
-wire format, persists player state, logs every request, and returns plausible
-data so the client can be brought up incrementally.
+**Built for client version 2.005 of Game of Sultans** (`com.dc.hwsj`). The
+version comes from the decompiled client's `macro.lua`, which sets
+`VERSION = 2.005`.
+
+## What this project is, in plain words
+
+This is a private server for the mobile game *Game of Sultans*. The real game
+normally talks to the publisher's servers. This server takes their place, so
+you can install the game on a phone or emulator, point it here, and play it as
+a small private world.
+
+You can create a sultan, collect taxes, upgrade buildings and advisers, take
+care of your court, join an alliance, fight battles, take part in events and
+buy diamonds. Buying is only simulated: the server gives you the diamonds and
+VIP levels from the game's own data, and no real money is charged.
+
+The server has no graphics of its own. It only answers the requests the game
+sends, using the same network format as the real server. The shape of each
+answer was taken from the decompiled 2.005 client, and the numbers, items and
+rewards come from the game's original config files wherever possible. It is a
+development and research project, not a service for public use.
 
 ## What is implemented
 
