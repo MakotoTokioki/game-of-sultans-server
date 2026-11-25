@@ -27,8 +27,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-SERVER = Path(__file__).resolve().parents[2]        # /root/game-of-sultans/server
-ROOT = SERVER.parent                               # /root/game-of-sultans
+SERVER = Path(__file__).resolve().parents[2]        # server repository root
+ROOT = SERVER.parent                               # workspace root
 DECOMP = Path("/tmp/opencode/gos/decomp_all")
 HARNESS = Path(__file__).parent / "harness.lua"
 CONFIG_DIR = Path("/tmp/opencode/gos/harness_configs")
